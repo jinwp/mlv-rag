@@ -48,15 +48,55 @@ export type Transcript = {
   refined_at?: string | null;
 };
 
-/** Shape returned by /api/ask (mock RAG for now). */
+export type AskSourceType = "meeting" | "web";
+export type AskMode = "rag" | "web" | "plain";
+
+export type AskHistoryMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 export type AskSource = {
+  label?: string;
+  type?: AskSourceType;
+  title?: string;
   text: string;
   reason: string;
-  meeting_id: string;
+  meeting_id?: string;
   timestamp?: number; // elapsed seconds into the meeting, if known
+  url?: string;
+  score?: number;
 };
 
 export type AskResponse = {
   answer: string; // markdown
   sources: AskSource[];
+  mode?: AskMode;
+  model?: string | null;
+  demo_mode?: boolean;
+  needs_api_key?: boolean;
+  web_search_enabled?: boolean;
+  web_search_used?: boolean;
+  chat_id?: string;
+  user_message_id?: string;
+  assistant_message_id?: string;
+};
+
+export type ChatSession = {
+  id: string;
+  title: string | null;
+  mode: AskMode | null;
+  created_at: string;
+  updated_at?: string | null;
+};
+
+export type ChatMessage = {
+  id: string;
+  chat_id: string;
+  role: "user" | "assistant";
+  content: string;
+  mode?: AskMode | null;
+  sources?: AskSource[] | null;
+  metadata?: Record<string, unknown> | null;
+  created_at: string;
 };

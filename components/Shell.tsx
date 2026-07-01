@@ -5,15 +5,17 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
-type NavKey = "new" | "list" | "ask";
+type NavKey = "new" | "list" | "ask" | "rag";
 
 const NAV: { key: NavKey; label: string; sub: string; href: string }[] = [
   { key: "new", label: "새 회의", sub: "/meetings/new", href: "/meetings/new" },
   { key: "list", label: "회의 목록", sub: "/meetings", href: "/meetings" },
   { key: "ask", label: "검색 · 챗봇", sub: "/ask", href: "/ask" },
+  { key: "rag", label: "RAG 실험", sub: "/rag", href: "/rag" },
 ];
 
 function groupFor(pathname: string): NavKey {
+  if (pathname.startsWith("/rag")) return "rag";
   if (pathname.startsWith("/meetings/new")) return "new";
   if (pathname.startsWith("/meetings")) {
     // record screen belongs to the "new" flow, list/detail to "list"

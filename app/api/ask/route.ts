@@ -1,173 +1,528 @@
+import OpenAI from "openai";
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabaseClient";
-import type { AskResponse, AskSource } from "@/lib/types";
+import { getDummyChunks } from "@/lib/rag/fixtures";
+import { rankMemoryChunks } from "@/lib/rag/retrieval";
+import type { MemoryChunkRow, MemorySearchResult } from "@/lib/rag/types";
+import { isSupabaseConfigured, supabase } from "@/lib/supabaseClient";
+import type { AskHistoryMessage, AskMode, AskResponse, AskSource } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
-/** "HH:MM:SS" | "MM:SS" → seconds. */
-function tsToSeconds(ts: string): number {
-  const parts = ts.split(":").map((n) => parseInt(n, 10));
-  if (parts.some((n) => Number.isNaN(n))) return 0;
-  return parts.reduce((acc, n) => acc * 60 + n, 0);
-}
+const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
+const MAX_LOCAL_SOURCES = 6;
 
-// A source template describes the evidence; `match` is a list of keywords used
-// to resolve it to a REAL meeting row (so the citation link works in the demo).
-type SourceTemplate = {
-  match: string[];
-  ts: string;
-  who: string;
-  reason: string;
-  quote: string;
+type AskRequest = {
+  question?: string;
+  mode?: AskMode;
+  useWebSearch?: boolean;
+  history?: AskHistoryMessage[];
+  chatId?: string;
 };
 
-type Answer = { answer: string; sources: SourceTemplate[] };
+type ExtractedOutput = {
+  text: string;
+  webSources: AskSource[];
+  webSearchUsed: boolean;
+};
 
-function answerFor(question: string): Answer {
-  const t = question.toLowerCase();
+type ChatStorage = {
+  chatId?: string;
+  userMessageId?: string;
+  storageError?: string;
+};
 
-  if (t.includes("gsm8k") || t.includes("tfqa") || t.includes("벤치마크")) {
+function secondsLabel(start?: number | null, end?: number | null): string {
+  if (start === null || start === undefined) return "no timestamp";
+  const fmt = (seconds: number) => {
+    const rounded = Math.max(0, Math.floor(seconds));
+    const minutes = Math.floor(rounded / 60);
+    const rest = rounded % 60;
+    return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+  };
+  if (end !== null && end !== undefined && end !== start) return `${fmt(start)}-${fmt(end)}`;
+  return fmt(start);
+}
+
+function safeSnippet(text: string, max = 1200): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  return compact.length > max ? `${compact.slice(0, max)}...` : compact;
+}
+
+function normalizeMode(body: AskRequest): AskMode {
+  if (body.mode === "rag" || body.mode === "web" || body.mode === "plain") return body.mode;
+  return body.useWebSearch ? "web" : "rag";
+}
+
+function sanitizeHistory(history: AskHistoryMessage[] | undefined): AskHistoryMessage[] {
+  if (!Array.isArray(history)) return [];
+  return history
+    .filter(
+      (message) =>
+        (message.role === "user" || message.role === "assistant") && typeof message.content === "string"
+    )
+    .slice(-12)
+    .map((message) => ({
+      role: message.role,
+      content: safeSnippet(message.content, 1600),
+    }));
+}
+
+function memorySourceLabel(index: number): string {
+  return `근거 ${index + 1}`;
+}
+
+function toAskSources(results: MemorySearchResult[]): AskSource[] {
+  return results.map((result, index) => {
+    const title = result.meeting_title ?? result.meeting_id;
+    const time = secondsLabel(result.start_seconds, result.end_seconds);
+    const date = result.meeting_date ?? "날짜 없음";
+    const label = memorySourceLabel(index);
+
     return {
-      answer:
-        "SBQ 논문의 main table 평가 벤치마크를 **GSM8K에서 TFQA-MC로** 바꾼 건 2026-05-24 회의에서 결정됐습니다.\n\n" +
-        "핵심 근거는 과제 성격입니다. SBQ의 기여가 reasoning 성능이 아니라 **factual consistency / hallucination 감소**이기 때문에, " +
-        "GSM8K에서는 signal이 약하고 TFQA-MC가 주장을 더 직접적으로 보여준다고 판단했습니다.\n\n" +
-        "- Main table: **TFQA-MC** (TruthfulQA multiple-choice), 5 seed 평균\n" +
-        "- GSM8K: appendix에 참고용으로만 유지\n" +
-        "- GSM8K를 main에서 제외한 이유를 justification 한 문단으로 명시 (담당: 박진웅)",
-      sources: [
-        {
-          match: ["sbq", "벤치마크", "논문"],
-          ts: "00:11:20",
-          who: "지도교수님",
-          reason:
-            "벤치마크 교체가 확정된 회의입니다. 지도교수의 최종 결정과 justification 작성 지시가 이 시점에 기록돼 있습니다.",
-          quote:
-            "그럼 GSM8K는 appendix에 참고용으로만 넣고, main table은 TFQA-MC로 갑시다. 대신 왜 GSM8K를 main에서 뺐는지 한 문단 justification 꼭 쓰고.",
-        },
-      ],
+      label,
+      type: "meeting",
+      title,
+      text: result.highlights.length ? result.highlights.join("\n") : safeSnippet(result.content, 500),
+      reason: `${title} · ${date} · ${time}`,
+      meeting_id: result.meeting_id,
+      timestamp: result.start_seconds ?? undefined,
+      score: result.score,
     };
-  }
+  });
+}
 
-  if (t.includes("camera") || t.includes("todo") || t.includes("camera-ready")) {
-    return {
-      answer:
-        "SBQ camera-ready와 관련해 현재 진행 중인 작업은 **TFQA-MC 재실험**과 **justification 문단 작성**입니다.\n\n" +
-        "- TFQA-MC 5 seed 평균으로 main table 재실험 (진행 중, 담당: 박진웅)\n" +
-        "- GSM8K를 main에서 제외한 이유 justification 문단 작성",
-      sources: [
-        {
-          match: ["랩미팅", "랩 운영", "주간"],
-          ts: "00:05:30",
-          who: "박진웅",
-          reason: "가장 최근 랩미팅에서 진행 상황으로 직접 언급된 항목입니다.",
-          quote: "SBQ camera-ready 준비 중이고, TFQA-MC 5 seed 재실험 돌리고 있습니다.",
-        },
-        {
-          match: ["sbq", "논문"],
-          ts: "00:13:05",
-          who: "박진웅",
-          reason: "justification 문단 작성과 재실험 계획이 처음 배정된 원 회의입니다.",
-          quote: "네, camera-ready 전에 TFQA-MC 5 seed 평균으로 다시 돌리겠습니다.",
-        },
-      ],
-    };
-  }
+function buildEvidenceBlock(results: MemorySearchResult[]): string {
+  if (results.length === 0) return "No local meeting-memory evidence was retrieved.";
 
-  if (
-    t.includes("로봇팔") ||
-    t.includes("grasp") ||
-    t.includes("실험") ||
-    t.includes("unseen") ||
-    t.includes("overfit") ||
-    t.includes("vla")
-  ) {
-    return {
-      answer:
-        "2026-05-17 VLA 로봇팔 회의에서 새 grasp policy가 baseline 대비 **success rate 12%p 상승**한 것을 확인했고, " +
-        "이 gain이 특정 object에 overfit됐을 가능성이 제기됐습니다.\n\n" +
-        "그래서 unseen object set으로 재평가하기로 했고, **ckpt-0413**을 기준 checkpoint로 비교표를 만들기로 결정했습니다. " +
-        "후속 회의(05-26)에서 unseen 20개 중 16개 성공으로 overfit 우려가 일부 해소됐습니다.\n\n" +
-        "- unseen object 20개를 큐레이션해 generalization 재검증 (담당: 규진)\n" +
-        "- 비교 기준 checkpoint: ckpt-0413, eval protocol은 기존과 동일 (object당 20 trial)",
-      sources: [
-        {
-          match: ["로봇팔", "grasp", "vla", "ablation"],
-          ts: "00:15:30",
-          who: "지도교수님",
-          reason: "실험 결과에 대한 결정(재평가·기준 checkpoint 지정)이 내려진 회의입니다.",
-          quote:
-            "unseen set으로 다시 돌려보고, 다음 주까지 checkpoint ckpt-0413 기준으로 비교표 만들어 오세요.",
-        },
-        {
-          match: ["unseen", "로봇팔", "vla"],
-          ts: "00:06:20",
-          who: "규진",
-          reason: "앞선 결정의 후속으로 unseen object 결과가 공유된 회의입니다.",
-          quote:
-            "unseen 20개 중 16개 성공, generalization gap은 예상보다 작았습니다. overfit 우려는 일부 해소됐어요.",
-        },
-      ],
-    };
+  return results
+    .map((result, index) => {
+      const label = memorySourceLabel(index);
+      const title = result.meeting_title ?? result.meeting_id;
+      const time = secondsLabel(result.start_seconds, result.end_seconds);
+      return [
+        `[${label}]`,
+        `meeting: ${title}`,
+        `date: ${result.meeting_date ?? "no-date"}`,
+        `project: ${result.project_tag ?? "미분류"}`,
+        `time: ${time}`,
+        `kind: ${result.memory_kind}`,
+        `similarity_score: ${result.score.toFixed(2)}`,
+        `content: ${safeSnippet(result.content)}`,
+      ].join("\n");
+    })
+    .join("\n\n");
+}
+
+async function loadMemoryChunks(): Promise<{ chunks: MemoryChunkRow[]; demoMode: boolean; memoryError?: string }> {
+  if (!isSupabaseConfigured) return { chunks: getDummyChunks(), demoMode: true };
+
+  const { data, error } = await supabase
+    .from("meeting_memory_chunks")
+    .select(
+      "id, meeting_id, source_type, source_id, chunk_index, memory_kind, content, speaker, start_seconds, end_seconds, tags, metadata, generated_by, created_at, meetings(title,date,project_tag)"
+    )
+    .order("created_at", { ascending: false })
+    .limit(1000)
+    .returns<MemoryChunkRow[]>();
+
+  if (error) return { chunks: [], demoMode: false, memoryError: error.message };
+  return { chunks: data ?? [], demoMode: false };
+}
+
+function extractOpenAIOutput(response: any): ExtractedOutput {
+  const outputText = typeof response.output_text === "string" ? response.output_text.trim() : "";
+  const fallbackTexts: string[] = [];
+  const webSources: AskSource[] = [];
+  let webSearchUsed = false;
+
+  for (const item of response.output ?? []) {
+    if (item?.type === "web_search_call") webSearchUsed = true;
+    for (const content of item?.content ?? []) {
+      if (typeof content?.text === "string" && content.text.trim()) {
+        fallbackTexts.push(content.text.trim());
+      }
+      for (const annotation of content?.annotations ?? []) {
+        if (annotation?.type !== "url_citation" || !annotation.url) continue;
+        if (webSources.some((existing) => existing.url === annotation.url)) continue;
+        webSources.push({
+          label: `웹 ${webSources.length + 1}`,
+          type: "web",
+          title: annotation.title || annotation.url,
+          text: annotation.title || annotation.url,
+          reason: "웹 검색 출처",
+          url: annotation.url,
+        });
+      }
+    }
   }
 
   return {
-    answer:
-      "질문과 관련도가 높은 회의를 찾았습니다. 아래 출처에서 원문 맥락을 확인하시고, " +
-      "정확한 결정 사항은 해당 회의 상세보기에서 타임스탬프 기준으로 검토하는 걸 권장합니다.\n\n" +
-      "_(데모: 이 질문에는 사전 준비된 답변이 없어, 가장 최근의 관련 회의를 반환했습니다.)_",
-    sources: [
-      {
-        match: [],
-        ts: "00:02:00",
-        who: "지도교수님",
-        reason: "가장 최근에 열린 회의로, 질문과 부분적으로 관련될 수 있습니다.",
-        quote: "이번 주 각자 진행상황 공유하죠. 짧게 갑시다.",
-      },
-    ],
+    text: outputText || fallbackTexts.filter(Boolean).join("\n").trim(),
+    webSources,
+    webSearchUsed,
   };
 }
 
-export async function POST(request: Request) {
-  let question = "";
+function fallbackAnswer(params: {
+  question: string;
+  mode: AskMode;
+  sources: AskSource[];
+  needsApiKey: boolean;
+  memoryError?: string;
+}): string {
+  const { question, mode, sources, needsApiKey, memoryError } = params;
+  if (mode === "plain") {
+    return needsApiKey
+      ? "OPENAI_API_KEY가 서버에 설정되지 않아 Plain Chatbot 답변을 생성할 수 없습니다.\n\nPlain 모드는 회의 DB나 웹 검색 없이, 현재 채팅 history를 바탕으로 분석과 디스커션을 하는 모드입니다."
+      : "LLM 호출에 실패해 Plain Chatbot 답변을 생성하지 못했습니다.";
+  }
+
+  if (mode === "web") {
+    return needsApiKey
+      ? "OPENAI_API_KEY가 서버에 설정되지 않아 웹 검색 답변을 생성할 수 없습니다.\n\n웹 검색 모드는 OpenAI Responses API의 web_search tool을 사용합니다."
+      : "LLM 웹 검색 호출에 실패했습니다.";
+  }
+
+  const lines = [
+    needsApiKey
+      ? "OPENAI_API_KEY가 서버에 설정되지 않아 LLM 호출 없이 검색 근거만 정리했습니다."
+      : "LLM 호출에 실패해 검색 근거만 정리했습니다.",
+    "",
+    `질문: ${question}`,
+  ];
+
+  if (memoryError) {
+    lines.push("", `로컬 메모리 DB를 읽는 중 문제가 있었습니다: ${memoryError}`);
+  }
+
+  if (sources.length === 0) {
+    lines.push("", "현재 연결된 회의 근거가 없습니다.");
+    return lines.join("\n");
+  }
+
+  lines.push("", "가장 관련 높은 회의 근거:");
+  for (const source of sources.slice(0, 3)) {
+    lines.push(`- ${source.label ?? "근거"}: ${source.reason}`);
+    lines.push(`  ${source.text}`);
+  }
+  return lines.join("\n");
+}
+
+function buildDeveloperPrompt(mode: AskMode): string {
+  if (mode === "rag") {
+    return [
+      "You are a Korean lab meeting search chatbot.",
+      "Answer from local meeting-memory evidence only.",
+      "Do not use outside knowledge for meeting decisions.",
+      "If evidence is insufficient, say so.",
+      "Use concise Markdown.",
+      "When citing local meeting evidence, write labels like '(근거 1)' or '(근거 2)'; never use '[E1]' style labels.",
+    ].join("\n");
+  }
+
+  if (mode === "web") {
+    return [
+      "You are a Korean web-search chatbot.",
+      "Use the hosted web search tool for current or public information.",
+      "Do not claim to know private lab meeting decisions unless the user provides them in the conversation.",
+      "Use concise Markdown and cite web sources when available.",
+    ].join("\n");
+  }
+
+  return [
+    "You are a Korean plain chatbot for analysis and discussion.",
+    "Do not use web search and do not use local RAG evidence.",
+    "Base your answer on the current conversation history and the user's latest message.",
+    "Help reason, compare options, critique ideas, and propose next steps.",
+    "Use concise Markdown.",
+  ].join("\n");
+}
+
+async function callOpenAI(params: {
+  apiKey: string;
+  model: string;
+  mode: AskMode;
+  question: string;
+  localEvidence: string;
+  history: AskHistoryMessage[];
+  memoryError?: string;
+}): Promise<ExtractedOutput> {
+  const openai = new OpenAI({ apiKey: params.apiKey });
+  const currentContent =
+    params.mode === "rag"
+      ? [
+          `Question:\n${params.question}`,
+          `Local meeting-memory evidence:\n${params.localEvidence}`,
+          params.memoryError ? `Memory DB warning:\n${params.memoryError}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+      : params.question;
+
+  const response = await openai.responses.create({
+    model: params.model,
+    max_output_tokens: 1000,
+    ...(params.mode === "web"
+      ? {
+          tools: [{ type: "web_search_preview", search_context_size: "low" }],
+          tool_choice: "auto",
+        }
+      : {}),
+    input: [
+      {
+        role: "developer",
+        content: buildDeveloperPrompt(params.mode),
+      },
+      ...params.history.map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+      {
+        role: "user",
+        content: currentContent,
+      },
+    ],
+  } as any);
+
+  const extracted = extractOpenAIOutput(response);
+  if (!extracted.text) throw new Error("OpenAI response did not include output text");
+  return extracted;
+}
+
+function chatTitle(question: string): string {
+  const compact = safeSnippet(question, 80);
+  return compact || "Untitled chat";
+}
+
+async function ensureChatStorage(params: {
+  requestedChatId?: string;
+  question: string;
+  mode: AskMode;
+  history: AskHistoryMessage[];
+}): Promise<ChatStorage> {
+  if (!isSupabaseConfigured) return {};
+
+  let chatId = params.requestedChatId?.trim() || "";
+
   try {
-    const body = await request.json();
-    question = typeof body?.question === "string" ? body.question : "";
-  } catch {
-    /* ignore malformed body */
-  }
+    if (chatId) {
+      const { data, error } = await supabase
+        .from("chat_sessions")
+        .select("id")
+        .eq("id", chatId)
+        .maybeSingle();
 
-  if (!question.trim()) {
-    return NextResponse.json({ error: "question is required" }, { status: 400 });
-  }
-
-  // Pull real meetings so citations can link to actual detail pages.
-  const { data: meetings } = await supabase
-    .from("meetings")
-    .select("id, title, project_tag, date")
-    .order("date", { ascending: false });
-  const rows = meetings ?? [];
-
-  const resolveMeetingId = (keywords: string[]): string => {
-    for (const kw of keywords) {
-      const hit = rows.find((m) => {
-        const hay = `${m.title ?? ""} ${m.project_tag ?? ""}`.toLowerCase();
-        return hay.includes(kw.toLowerCase());
-      });
-      if (hit) return hit.id;
+      if (error) throw error;
+      if (!data) chatId = "";
     }
-    // fall back to the most recent meeting, or empty if the archive is empty
-    return rows[0]?.id ?? "";
-  };
 
-  const tmpl = answerFor(question);
-  const sources: AskSource[] = tmpl.sources.map((s) => ({
-    text: s.quote,
-    reason: `${s.reason} — [${s.ts}] ${s.who}`,
-    meeting_id: resolveMeetingId(s.match),
-    timestamp: tsToSeconds(s.ts),
-  }));
+    if (!chatId) {
+      const { data, error } = await supabase
+        .from("chat_sessions")
+        .insert({
+          title: chatTitle(params.question),
+          mode: params.mode,
+          updated_at: new Date().toISOString(),
+        })
+        .select("id")
+        .single();
 
-  const payload: AskResponse = { answer: tmpl.answer, sources };
-  return NextResponse.json(payload);
+      if (error) throw error;
+      chatId = (data as { id: string }).id;
+    } else {
+      await supabase
+        .from("chat_sessions")
+        .update({ mode: params.mode, updated_at: new Date().toISOString() })
+        .eq("id", chatId);
+    }
+
+    const userMessageId = await insertChatMessage({
+      chatId,
+      role: "user",
+      content: params.question,
+      mode: params.mode,
+      sources: [],
+      metadata: { history_count: params.history.length },
+    });
+
+    return { chatId, userMessageId };
+  } catch (error) {
+    const storageError = error instanceof Error ? error.message : "chat storage failed";
+    console.warn("[ask] chat storage disabled:", storageError);
+    return { storageError };
+  }
+}
+
+async function insertChatMessage(params: {
+  chatId?: string;
+  role: "user" | "assistant";
+  content: string;
+  mode: AskMode;
+  sources: AskSource[];
+  metadata?: Record<string, unknown>;
+}): Promise<string | undefined> {
+  if (!isSupabaseConfigured || !params.chatId) return undefined;
+
+  const { data, error } = await supabase
+    .from("chat_messages")
+    .insert({
+      chat_id: params.chatId,
+      role: params.role,
+      content: params.content,
+      mode: params.mode,
+      sources: params.sources,
+      metadata: params.metadata ?? {},
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    console.warn("[ask] failed to store chat message:", error.message);
+    return undefined;
+  }
+
+  await supabase
+    .from("chat_sessions")
+    .update({ updated_at: new Date().toISOString(), mode: params.mode })
+    .eq("id", params.chatId);
+
+  return (data as { id: string }).id;
+}
+
+async function responseWithStoredAssistant(
+  payload: AskResponse,
+  status: number,
+  chat: ChatStorage,
+  mode: AskMode,
+  metadata?: Record<string, unknown>
+) {
+  const assistantMessageId = await insertChatMessage({
+    chatId: chat.chatId,
+    role: "assistant",
+    content: payload.answer,
+    mode,
+    sources: payload.sources,
+    metadata,
+  });
+
+  return NextResponse.json(
+    {
+      ...payload,
+      chat_id: chat.chatId,
+      user_message_id: chat.userMessageId,
+      assistant_message_id: assistantMessageId,
+    },
+    { status }
+  );
+}
+
+export async function POST(request: Request) {
+  let body: AskRequest = {};
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "request body must be JSON" }, { status: 400 });
+  }
+
+  const question = body.question?.trim();
+  if (!question) return NextResponse.json({ error: "question is required" }, { status: 400 });
+
+  const mode = normalizeMode(body);
+  const history = sanitizeHistory(body.history);
+  const loaded = mode === "rag" ? await loadMemoryChunks() : { chunks: [], demoMode: false };
+  const results =
+    mode === "rag"
+      ? rankMemoryChunks(question, loaded.chunks, {
+          limit: MAX_LOCAL_SOURCES,
+          sortBySimilarity: true,
+        })
+      : [];
+  const localSources = toAskSources(results);
+  const chat = await ensureChatStorage({
+    requestedChatId: body.chatId,
+    question,
+    mode,
+    history,
+  });
+  const apiKey = process.env.OPENAI_API_KEY;
+  const model =
+    mode === "web"
+      ? process.env.OPENAI_WEB_SEARCH_MODEL || process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL
+      : process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
+
+  if (!apiKey) {
+    const payload: AskResponse = {
+      answer: fallbackAnswer({
+        question,
+        mode,
+        sources: localSources,
+        needsApiKey: true,
+        memoryError: loaded.memoryError,
+      }),
+      sources: localSources,
+      mode,
+      model: null,
+      demo_mode: loaded.demoMode,
+      needs_api_key: true,
+      web_search_enabled: mode === "web",
+      web_search_used: false,
+      chat_id: chat.chatId,
+      user_message_id: chat.userMessageId,
+    };
+    return responseWithStoredAssistant(payload, 200, chat, mode, { needs_api_key: true, storage_error: chat.storageError });
+  }
+
+  try {
+    const output = await callOpenAI({
+      apiKey,
+      model,
+      mode,
+      question,
+      localEvidence: buildEvidenceBlock(results),
+      history,
+      memoryError: loaded.memoryError,
+    });
+
+    const payload: AskResponse = {
+      answer: output.text,
+      sources: [...localSources, ...output.webSources],
+      mode,
+      model,
+      demo_mode: loaded.demoMode,
+      web_search_enabled: mode === "web",
+      web_search_used: output.webSearchUsed,
+      chat_id: chat.chatId,
+      user_message_id: chat.userMessageId,
+    };
+    return responseWithStoredAssistant(payload, 200, chat, mode, { storage_error: chat.storageError });
+  } catch (error) {
+    const payload: AskResponse = {
+      answer: fallbackAnswer({
+        question,
+        mode,
+        sources: localSources,
+        needsApiKey: false,
+        memoryError: loaded.memoryError,
+      }),
+      sources: localSources,
+      mode,
+      model,
+      demo_mode: loaded.demoMode,
+      web_search_enabled: mode === "web",
+      web_search_used: false,
+      chat_id: chat.chatId,
+      user_message_id: chat.userMessageId,
+    };
+    return responseWithStoredAssistant(
+      {
+        ...payload,
+        answer: `${payload.answer}\n\n_${error instanceof Error ? error.message : "OpenAI request failed"}_`,
+      },
+      502,
+      chat,
+      mode,
+      { storage_error: chat.storageError }
+    );
+  }
 }

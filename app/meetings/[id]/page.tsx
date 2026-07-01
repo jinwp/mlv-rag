@@ -5,6 +5,7 @@ import { weekday } from "@/lib/format";
 import type { Meeting, Note, Photo, Transcript } from "@/lib/types";
 import { TranscriptRefinePanel } from "@/components/TranscriptRefinePanel";
 import { PhotoUploadPanel } from "@/components/PhotoUploadPanel";
+import { MeetingChatContextPanel } from "@/components/MeetingChatContextPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -146,12 +147,21 @@ export default async function MeetingDetailPage({
           }}
         >
           {/* transcript */}
-          <div style={{ flex: "1 1 520px", minWidth: 320 }}>
+          <div
+            style={{
+              flex: "1 1 520px",
+              minWidth: 320,
+              display: "flex",
+              flexDirection: "column",
+              gap: 20,
+            }}
+          >
             <TranscriptRefinePanel
               meeting={meeting}
               notes={noteList}
               transcripts={transcript}
             />
+            <MeetingChatContextPanel meetingId={meeting.id} />
           </div>
 
           {/* right rail */}
