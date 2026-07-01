@@ -29,6 +29,12 @@ The latest upstream STT/OCR/photo features are preserved. The only meeting-detai
 UI insertion from this branch is `MeetingChatContextPanel`, placed directly under
 `TranscriptRefinePanel`.
 
+If `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are configured
+but `supabase-rag-schema.sql` has not been run yet, RAG search and `/ask` RAG
+mode fall back to built-in demo memory so the UI remains testable. Real DB
+indexing, chat persistence, and meeting chat-context selection require the SQL
+schema to be applied.
+
 ## Experimental API
 
 Open the local UI:
@@ -121,6 +127,19 @@ Never use `NEXT_PUBLIC_OPENAI_API_KEY`. `NEXT_PUBLIC_*` values are bundled for
 browser use, while the OpenAI key must stay server-only. If `OPENAI_API_KEY` is
 missing, the chat routes return a local evidence-only fallback so the UI remains
 testable without a provider call.
+
+For local development, copy `.env.example` to `.env.local` at the repo root:
+
+```bash
+cp .env.example .env.local
+```
+
+Then fill the values in `.env.local`. The file is ignored by git. Put:
+
+- Supabase browser keys in `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+- OpenAI server key in `OPENAI_API_KEY`.
+- CLOVA Speech values in `STT_PROVIDER`, `NAVER_CLOVA_SPEECH_SECRET`, and `NAVER_CLOVA_SPEECH_INVOKE_URL`.
+- Model overrides in `OPENAI_MODEL`, `OPENAI_WEB_SEARCH_MODEL`, `OPENAI_REWRITE_MODEL`, `OPENAI_OCR_MODEL`, and `OPENAI_IMAGE_MODEL`.
 
 Each `/ask` response can carry:
 

@@ -74,6 +74,8 @@ export type AskResponse = {
   mode?: AskMode;
   model?: string | null;
   demo_mode?: boolean;
+  schema_missing?: boolean;
+  memory_error?: string;
   needs_api_key?: boolean;
   web_search_enabled?: boolean;
   web_search_used?: boolean;

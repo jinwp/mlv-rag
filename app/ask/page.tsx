@@ -15,6 +15,9 @@ type AssistantMsg = {
   mode?: AskMode;
   model?: string | null;
   needsApiKey?: boolean;
+  demoMode?: boolean;
+  schemaMissing?: boolean;
+  memoryError?: string;
   webSearchEnabled?: boolean;
   webSearchUsed?: boolean;
 };
@@ -157,6 +160,9 @@ export default function AskPage() {
               mode: data.mode ?? requestMode,
               model: data.model,
               needsApiKey: data.needs_api_key,
+              demoMode: data.demo_mode,
+              schemaMissing: data.schema_missing,
+              memoryError: data.memory_error,
               webSearchEnabled: data.web_search_enabled,
               webSearchUsed: data.web_search_used,
             };
@@ -423,6 +429,7 @@ export default function AskPage() {
                             : [
                                 modeLabel(m.mode),
                                 m.model,
+                                m.demoMode ? (m.schemaMissing ? "demo memory" : "demo") : null,
                                 m.webSearchEnabled ? (m.webSearchUsed ? "웹 검색 사용" : "웹 검색 허용") : null,
                               ]
                                 .filter(Boolean)
@@ -440,6 +447,11 @@ export default function AskPage() {
                         <div style={{ fontSize: 14.5, lineHeight: 1.68, color: "#25303f" }}>
                           <ReactMarkdown components={mdComponents}>{markdownWithSourceLinks(m.answer, i)}</ReactMarkdown>
                         </div>
+                        {m.memoryError && m.demoMode && (
+                          <div style={{ marginTop: 8, fontSize: 12.5, lineHeight: 1.5, color: "#8a6a23" }}>
+                            {m.memoryError}
+                          </div>
+                        )}
 
                         {m.sources.length > 0 && (
                           <div

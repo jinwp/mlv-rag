@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
-import { getDummyChunks } from "@/lib/rag/fixtures";
+import { loadMemoryChunks } from "@/lib/rag/loadMemory";
 import { rankMemoryChunks } from "@/lib/rag/retrieval";
-import type { MemoryChunkRow, RagSearchRequest } from "@/lib/rag/types";
-import { isSupabaseConfigured, supabase } from "@/lib/supabaseClient";
+import type { RagSearchRequest } from "@/lib/rag/types";
 
 export const dynamic = "force-dynamic";
 
@@ -21,40 +20,16 @@ export async function POST(request: Request) {
   const question = body.question?.trim();
   if (!question) return jsonError("question is required");
 
-  if (!isSupabaseConfigured) {
-    const results = rankMemoryChunks(question, getDummyChunks(), {
-      limit: body.limit,
-      projectTag: body.projectTag,
-      kinds: body.kinds,
-      sortBySimilarity: body.sortBySimilarity !== false,
-    });
-
-    return NextResponse.json({
-      question,
-      demo_mode: true,
-      count: results.length,
-      results,
-    });
-  }
-
-  const { data, error } = await supabase
-    .from("meeting_memory_chunks")
-    .select(
-      "id, meeting_id, source_type, source_id, chunk_index, memory_kind, content, speaker, start_seconds, end_seconds, tags, metadata, generated_by, created_at, meetings(title,date,project_tag)"
-    )
-    .order("created_at", { ascending: false })
-    .limit(1000)
-    .returns<MemoryChunkRow[]>();
-
-  if (error) {
+  const loaded = await loadMemoryChunks();
+  if (loaded.memoryError && !loaded.demoMode) {
     return jsonError(
       "failed to read memory chunks. Did you run supabase-rag-schema.sql and index a meeting?",
       500,
-      error.message
+      loaded.memoryError
     );
   }
 
-  const results = rankMemoryChunks(question, data ?? [], {
+  const results = rankMemoryChunks(question, loaded.chunks, {
     limit: body.limit,
     projectTag: body.projectTag,
     kinds: body.kinds,
@@ -63,6 +38,9 @@ export async function POST(request: Request) {
 
   return NextResponse.json({
     question,
+    demo_mode: loaded.demoMode,
+    schema_missing: loaded.schemaMissing,
+    warning: loaded.memoryError,
     count: results.length,
     results,
   });

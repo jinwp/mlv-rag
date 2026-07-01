@@ -1,8 +1,8 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
-import { getDummyChunks } from "@/lib/rag/fixtures";
+import { loadMemoryChunks } from "@/lib/rag/loadMemory";
 import { rankMemoryChunks } from "@/lib/rag/retrieval";
-import type { MemoryChunkRow, MemorySearchResult } from "@/lib/rag/types";
+import type { MemorySearchResult } from "@/lib/rag/types";
 import { isSupabaseConfigured, supabase } from "@/lib/supabaseClient";
 import type { AskHistoryMessage, AskMode, AskResponse, AskSource } from "@/lib/types";
 
@@ -112,22 +112,6 @@ function buildEvidenceBlock(results: MemorySearchResult[]): string {
       ].join("\n");
     })
     .join("\n\n");
-}
-
-async function loadMemoryChunks(): Promise<{ chunks: MemoryChunkRow[]; demoMode: boolean; memoryError?: string }> {
-  if (!isSupabaseConfigured) return { chunks: getDummyChunks(), demoMode: true };
-
-  const { data, error } = await supabase
-    .from("meeting_memory_chunks")
-    .select(
-      "id, meeting_id, source_type, source_id, chunk_index, memory_kind, content, speaker, start_seconds, end_seconds, tags, metadata, generated_by, created_at, meetings(title,date,project_tag)"
-    )
-    .order("created_at", { ascending: false })
-    .limit(1000)
-    .returns<MemoryChunkRow[]>();
-
-  if (error) return { chunks: [], demoMode: false, memoryError: error.message };
-  return { chunks: data ?? [], demoMode: false };
 }
 
 function extractOpenAIOutput(response: any): ExtractedOutput {
@@ -464,6 +448,8 @@ export async function POST(request: Request) {
       mode,
       model: null,
       demo_mode: loaded.demoMode,
+      schema_missing: loaded.schemaMissing,
+      memory_error: loaded.memoryError,
       needs_api_key: true,
       web_search_enabled: mode === "web",
       web_search_used: false,
@@ -490,6 +476,8 @@ export async function POST(request: Request) {
       mode,
       model,
       demo_mode: loaded.demoMode,
+      schema_missing: loaded.schemaMissing,
+      memory_error: loaded.memoryError,
       web_search_enabled: mode === "web",
       web_search_used: output.webSearchUsed,
       chat_id: chat.chatId,
@@ -509,6 +497,8 @@ export async function POST(request: Request) {
       mode,
       model,
       demo_mode: loaded.demoMode,
+      schema_missing: loaded.schemaMissing,
+      memory_error: loaded.memoryError,
       web_search_enabled: mode === "web",
       web_search_used: false,
       chat_id: chat.chatId,

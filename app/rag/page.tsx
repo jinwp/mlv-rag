@@ -32,6 +32,9 @@ type SearchResponse = {
   question?: string;
   count?: number;
   results?: MemorySearchResult[];
+  demo_mode?: boolean;
+  schema_missing?: boolean;
+  warning?: string;
   error?: string;
   details?: unknown;
 };
@@ -54,6 +57,8 @@ type ChatItem = RagChatMessage & {
   model?: string | null;
   sources?: MemorySearchResult[];
   needs_api_key?: boolean;
+  demo_mode?: boolean;
+  warning?: string;
 };
 
 const panel: React.CSSProperties = {
@@ -342,7 +347,11 @@ export default function RagPage() {
       }
 
       setResults(data.results ?? []);
-      setSearchMessage(`${data.count ?? 0} results`);
+      setSearchMessage(
+        data.demo_mode
+          ? `${data.count ?? 0} demo results${data.schema_missing ? " · schema not applied" : ""}`
+          : `${data.count ?? 0} results`
+      );
       setSearchState("done");
     } catch (err) {
       setSearchState("error");
@@ -398,6 +407,8 @@ export default function RagPage() {
             model: data.model,
             sources: data.sources,
             needs_api_key: data.needs_api_key,
+            demo_mode: data.demo_mode,
+            warning: data.warning,
           }
         : null;
 
@@ -412,7 +423,9 @@ export default function RagPage() {
       setChatMessage(
         data.needs_api_key
           ? "OPENAI_API_KEY 필요"
-          : `${data.model ?? "local"} · ${(data.sources ?? []).length} sources`
+          : `${data.model ?? "local"} · ${(data.sources ?? []).length} sources${
+              data.demo_mode ? " · demo memory" : ""
+            }`
       );
       setChatState("done");
     } catch (err) {
@@ -824,8 +837,13 @@ export default function RagPage() {
                           <>
                             <div className="mono" style={{ marginTop: 8, fontSize: 10.5, color: "#8a93a3" }}>
                               {message.needs_api_key ? "server env required" : message.model ?? "local"} ·{" "}
-                              {message.sources?.length ?? 0} sources
+                              {message.sources?.length ?? 0} sources{message.demo_mode ? " · demo memory" : ""}
                             </div>
+                            {message.warning && (
+                              <div style={{ marginTop: 6, fontSize: 12, lineHeight: 1.45, color: "#8a6a23" }}>
+                                {message.warning}
+                              </div>
+                            )}
                             {message.sources && message.sources.length > 0 && (
                               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 9 }}>
                                 {message.sources.map((source, index) => (

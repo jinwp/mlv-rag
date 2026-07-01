@@ -108,5 +108,7 @@ export type RagChatResponse = {
   sources: MemorySearchResult[];
   model?: string | null;
   demo_mode?: boolean;
+  schema_missing?: boolean;
+  warning?: string;
   needs_api_key?: boolean;
 };

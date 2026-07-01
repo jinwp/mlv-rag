@@ -60,6 +60,17 @@ function formatDate(value?: string | null): string {
   return new Date(value).toLocaleString();
 }
 
+function isMissingChatSchemaError(message: string | undefined): boolean {
+  if (!message) return false;
+  const lower = message.toLowerCase();
+  return (
+    (lower.includes("chat_sessions") || lower.includes("meeting_chat_context_selections")) &&
+    (lower.includes("could not find the table") ||
+      lower.includes("schema cache") ||
+      lower.includes("pgrst205"))
+  );
+}
+
 export function MeetingChatContextPanel({ meetingId }: Props) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -116,7 +127,12 @@ export function MeetingChatContextPanel({ meetingId }: Props) {
         }
       } catch (err: any) {
         if (alive) {
-          setError(err?.message ?? "Failed to load chat context selections.");
+          const message = err?.message ?? "Failed to load chat context selections.";
+          setError(
+            isMissingChatSchemaError(message)
+              ? "Chat context tables are not applied yet. Run supabase-rag-schema.sql, then reload this page."
+              : message
+          );
         }
       } finally {
         if (alive) setLoading(false);

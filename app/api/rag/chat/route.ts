@@ -1,15 +1,13 @@
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
-import { getDummyChunks } from "@/lib/rag/fixtures";
+import { loadMemoryChunks } from "@/lib/rag/loadMemory";
 import { rankMemoryChunks } from "@/lib/rag/retrieval";
 import type {
-  MemoryChunkRow,
   MemorySearchResult,
   RagChatMessage,
   RagChatRequest,
   RagChatResponse,
 } from "@/lib/rag/types";
-import { isSupabaseConfigured, supabase } from "@/lib/supabaseClient";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -150,22 +148,6 @@ function fallbackAnswer(question: string, results: MemorySearchResult[], needsAp
   return [prefix, "", `질문: ${question}`, "", "가장 관련 높은 근거:", ...bullets].join("\n");
 }
 
-async function loadChunks(): Promise<{ chunks: MemoryChunkRow[]; demoMode: boolean; error?: string }> {
-  if (!isSupabaseConfigured) return { chunks: getDummyChunks(), demoMode: true };
-
-  const { data, error } = await supabase
-    .from("meeting_memory_chunks")
-    .select(
-      "id, meeting_id, source_type, source_id, chunk_index, memory_kind, content, speaker, start_seconds, end_seconds, tags, metadata, generated_by, created_at, meetings(title,date,project_tag)"
-    )
-    .order("created_at", { ascending: false })
-    .limit(1000)
-    .returns<MemoryChunkRow[]>();
-
-  if (error) return { chunks: [], demoMode: false, error: error.message };
-  return { chunks: data ?? [], demoMode: false };
-}
-
 async function callOpenAI(params: {
   apiKey: string;
   model: string;
@@ -228,12 +210,12 @@ export async function POST(request: Request) {
   const assistantMessageId = `assistant_${randomUUID()}`;
   const history = sanitizeHistory(body.history);
 
-  const loaded = await loadChunks();
-  if (loaded.error) {
+  const loaded = await loadMemoryChunks();
+  if (loaded.memoryError && !loaded.demoMode) {
     return jsonError(
       "failed to read memory chunks. Did you run supabase-rag-schema.sql and index a meeting?",
       500,
-      loaded.error
+      loaded.memoryError
     );
   }
 
@@ -252,6 +234,8 @@ export async function POST(request: Request) {
     assistantMessageId,
     sources,
     demo_mode: loaded.demoMode,
+    schema_missing: loaded.schemaMissing,
+    warning: loaded.memoryError,
   };
 
   if (!apiKey) {
