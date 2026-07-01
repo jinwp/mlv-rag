@@ -23,10 +23,25 @@ function groupFor(pathname: string): NavKey {
   return "ask";
 }
 
+// Matches /meetings/<id> or /meetings/<id>/record, capturing the id — but not
+// /meetings/new (handled by the earlier branch in groupFor/display logic).
+const MEETING_ROUTE = /^\/meetings\/([^/]+)(\/record)?$/;
+
+/** Header shows the meeting title instead of the raw UUID for readability. */
+function displayPath(pathname: string, titleById: Record<string, string>): string {
+  const m = pathname.match(MEETING_ROUTE);
+  if (!m || m[1] === "new") return pathname;
+  const [, id, recordSuffix] = m;
+  const title = titleById[id];
+  if (!title) return pathname;
+  return `/meetings/${title}${recordSuffix ?? ""}`;
+}
+
 export default function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || "/ask";
   const group = groupFor(pathname);
   const [count, setCount] = useState<number | null>(null);
+  const [titleById, setTitleById] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let alive = true;
@@ -40,6 +55,24 @@ export default function Shell({ children }: { children: React.ReactNode }) {
       alive = false;
     };
   }, [pathname]);
+
+  useEffect(() => {
+    const m = pathname.match(MEETING_ROUTE);
+    if (!m || m[1] === "new" || titleById[m[1]]) return;
+    const id = m[1];
+    let alive = true;
+    supabase
+      .from("meetings")
+      .select("title")
+      .eq("id", id)
+      .single()
+      .then(({ data }) => {
+        if (alive && data?.title) setTitleById((prev) => ({ ...prev, [id]: data.title }));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [pathname, titleById]);
 
   return (
     <div style={{ display: "flex", height: "100vh", width: "100%", overflow: "hidden" }}>
@@ -197,8 +230,18 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           <span className="mono" style={{ fontSize: 12, color: "#c2cad6" }}>
             :~$
           </span>
-          <span className="mono" style={{ fontSize: 12.5, color: "#5b6472", fontWeight: 500 }}>
-            {pathname}
+          <span
+            className="mono"
+            style={{
+              fontSize: 12.5,
+              color: "#5b6472",
+              fontWeight: 500,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {displayPath(pathname, titleById)}
           </span>
         </header>
 
