@@ -14,6 +14,19 @@ export type Photo = {
   storage_path: string;
   elapsed_seconds: number;
   created_at: string;
+
+  analysis_status?: string | null;
+  analysis_modes?: string[] | null;
+  extracted_text?: string | null;
+  extracted_latex?: string | null;
+  diagram_summary?: string | null;
+  analysis_feedback?: string | null;
+  analyzed_at?: string | null;
+
+  figure_prompt?: string | null;
+  generated_figure_path?: string | null;
+  figure_provider?: string | null;
+  figure_generated_at?: string | null;
 };
 
 export type Note = {
@@ -30,6 +43,9 @@ export type Transcript = {
   full_text: string;
   audio_path: string | null;
   created_at: string;
+  refined_text?: string | null;
+  refinement_context?: string | null;
+  refined_at?: string | null;
 };
 
 /** Shape returned by /api/ask (mock RAG for now). */

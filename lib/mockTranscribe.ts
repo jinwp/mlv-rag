@@ -1,16 +1,31 @@
-/**
- * STT (speech-to-text) placeholder.
- *
- * A teammate will later replace ONLY the body of this function with a real STT
- * call (e.g. upload `audioPath` to Whisper / a hosted STT endpoint and return
- * the transcribed text). The signature is intentionally kept stable so callers
- * (the /record "종료 및 저장" flow) don't need to change.
- *
- * @param audioPath Supabase Storage path of the recorded audio.
- * @returns The full transcript text to store in `transcripts.full_text`.
- */
 export async function mockTranscribe(audioPath: string): Promise<string> {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const _audioPath = audioPath;
-  return "[STT 연동 대기 중]";
+  if (!audioPath) return "[오디오 파일 없음]";
+
+  console.log("[mockTranscribe] audioPath:", audioPath);
+
+  let res: Response;
+
+  try {
+    res = await fetch("/api/transcribe", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ audioPath }),
+    });
+  } catch (err) {
+    console.error("[mockTranscribe] fetch crashed:", err);
+    return "[STT 요청 실패: fetch crashed]";
+  }
+
+  const raw = await res.text();
+  console.log("[mockTranscribe] status:", res.status);
+  console.log("[mockTranscribe] raw response:", raw);
+
+  if (!res.ok) {
+    return `[STT 실패: ${res.status}]`;
+  }
+
+  const data = JSON.parse(raw);
+  return data.text ?? "[STT 결과 없음]";
 }
