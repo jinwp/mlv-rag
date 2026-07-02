@@ -205,7 +205,7 @@ export function MeetingListClient({ meetings }: Props) {
             )}
           </Link>
 
-          <DeleteMeetingButton meetingId={meeting.id} title={meeting.title} />
+          <DeleteMeetingButton meetingId={meeting.id} meetingTitle={meeting.title} />
         </div>
       ))}
 
