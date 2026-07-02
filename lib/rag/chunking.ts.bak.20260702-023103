@@ -13,9 +13,6 @@ const DEFAULT_TRANSCRIPT_MAX_CHARS = 2400;
 const DEFAULT_NOTE_MAX_CHARS = 1200;
 const DEFAULT_NOTE_OVERLAP_CHARS = 180;
 
-const DEFAULT_SUMMARY_MAX_CHARS = 1800;
-const DEFAULT_SUMMARY_OVERLAP_CHARS = 220;
-
 const LEADING_TIMESTAMP_RE =
   /^\s*\[?\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?:\s*(?:-|–|—|~|to)\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2}))?\s*\]?\s*/i;
 
@@ -323,50 +320,6 @@ function meetingMetaChunk(meeting: Meeting): MemoryChunkInput {
   };
 }
 
-
-function meetingSummaryChunks(
-  meeting: Meeting,
-  baseTags: string[]
-): MemoryChunkInput[] {
-  const summary = cleanText(meeting.summary_text ?? "");
-  if (!summary) return [];
-
-  return splitLongText(
-    summary,
-    DEFAULT_SUMMARY_MAX_CHARS,
-    DEFAULT_SUMMARY_OVERLAP_CHARS
-  ).map((content, index) => ({
-    meeting_id: meeting.id,
-    source_type: "meeting" as const,
-    source_id: null,
-    chunk_index: 100000 + index,
-    memory_kind: "summary" as const,
-    content: [
-      "Meeting sequential summary",
-      `Title: ${meeting.title}`,
-      `Date: ${meeting.date ?? "unknown"}`,
-      `Project: ${meeting.project_tag ?? "unclassified"}`,
-      `Participants: ${(meeting.participants ?? []).join(", ") || "unknown"}`,
-      "",
-      content,
-    ].join("\n"),
-    tags: [
-      ...baseTags,
-      "summary",
-      "sequential-summary",
-      "meeting-overview",
-    ],
-    metadata: {
-      title: meeting.title,
-      date: meeting.date,
-      summary_type: "sequential",
-      summary_generated_at: meeting.summary_generated_at ?? null,
-      summary_model: meeting.summary_model ?? null,
-    },
-    generated_by: LOCAL_CHUNKER_ID,
-  }));
-}
-
 function photoMetadata(photo: Photo) {
   return {
     storage_path: photo.storage_path,
@@ -471,8 +424,6 @@ export function buildMeetingMemoryChunks({
 }: BuildInput): MemoryChunkInput[] {
   const chunks: MemoryChunkInput[] = [meetingMetaChunk(meeting)];
   const baseTags = [meeting.project_tag ?? "unclassified"].filter(Boolean);
-
-  chunks.push(...meetingSummaryChunks(meeting, baseTags));
 
   for (const transcript of transcripts) {
     const { text, version } = preferredTranscriptText(transcript);

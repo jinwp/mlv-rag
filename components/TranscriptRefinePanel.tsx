@@ -54,6 +54,49 @@ const pre: React.CSSProperties = {
   lineHeight: 1.6,
 };
 
+const rawDetails: React.CSSProperties = {
+  border: "1px solid #e5e7eb",
+  borderRadius: 10,
+  background: "#f8fafc",
+  padding: "10px 12px",
+};
+
+const rawSummary: React.CSSProperties = {
+  cursor: "pointer",
+  fontSize: 12.5,
+  fontWeight: 800,
+  color: "#3550c7",
+};
+
+const refinedScrollBox: React.CSSProperties = {
+  ...pre,
+  background: "#f0fdf4",
+  borderColor: "#bbf7d0",
+  maxHeight: 640,
+  overflow: "auto",
+};
+
+const inputLabel: React.CSSProperties = {
+  fontSize: 12,
+  fontWeight: 800,
+  color: "#303949",
+  marginBottom: 6,
+};
+
+const textarea: React.CSSProperties = {
+  width: "100%",
+  minHeight: 82,
+  resize: "vertical",
+  border: "1px solid #d8dee7",
+  borderRadius: 9,
+  padding: "9px 11px",
+  fontSize: 13,
+  lineHeight: 1.5,
+  color: "#1b2231",
+  outline: "none",
+  background: "#fbfcfe",
+};
+
 export function TranscriptRefinePanel({
   meeting,
   notes,
@@ -62,10 +105,14 @@ export function TranscriptRefinePanel({
   const [items, setItems] = useState<Transcript[]>(transcripts);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [speakerMaps, setSpeakerMaps] = useState<Record<string, string>>({});
 
   async function refineTranscript(t: Transcript) {
     setBusyId(t.id);
     setError(null);
+
+    const speakerMapText = speakerMaps[t.id] ?? "";
+    const refinedAt = new Date().toISOString();
 
     try {
       const res = await fetch("/api/refine-transcript", {
@@ -75,6 +122,7 @@ export function TranscriptRefinePanel({
         },
         body: JSON.stringify({
           rawText: t.full_text,
+          speakerMapText,
           meeting: {
             title: meeting.title,
             date: meeting.date,
@@ -103,7 +151,7 @@ export function TranscriptRefinePanel({
         .update({
           refined_text: refinedText,
           refinement_context: contextSummary,
-          refined_at: new Date().toISOString(),
+          refined_at: refinedAt,
         })
         .eq("id", t.id);
 
@@ -118,7 +166,7 @@ export function TranscriptRefinePanel({
                 ...item,
                 refined_text: refinedText,
                 refinement_context: contextSummary,
-                refined_at: new Date().toISOString(),
+                refined_at: refinedAt,
               }
             : item
         )
@@ -137,7 +185,7 @@ export function TranscriptRefinePanel({
         <div>
           <div style={{ fontWeight: 800 }}>전사 (STT)</div>
           <div style={{ color: "#64748b", fontSize: 12 }}>
-            raw transcript → notes-context rewrite
+            raw transcript → speaker-aware notes-context rewrite
           </div>
         </div>
       </div>
@@ -166,7 +214,7 @@ export function TranscriptRefinePanel({
               key={t.id}
               style={{
                 display: "grid",
-                gap: 12,
+                gap: 14,
                 border: "1px solid #eef2f7",
                 borderRadius: 12,
                 padding: 14,
@@ -181,14 +229,20 @@ export function TranscriptRefinePanel({
                 }}
               >
                 <div>
-                  <div style={{ fontWeight: 800 }}>Raw transcript</div>
+                  <div style={{ fontWeight: 800 }}>
+                    Transcript refinement
+                  </div>
                   <div style={{ color: "#64748b", fontSize: 12 }}>
                     {new Date(t.created_at).toLocaleString()}
                   </div>
                 </div>
 
                 <button
-                  style={primaryButton}
+                  style={{
+                    ...primaryButton,
+                    opacity: busyId === t.id ? 0.65 : 1,
+                    cursor: busyId === t.id ? "not-allowed" : "pointer",
+                  }}
                   disabled={busyId === t.id}
                   onClick={() => refineTranscript(t)}
                 >
@@ -202,28 +256,58 @@ export function TranscriptRefinePanel({
                 </div>
               )}
 
-              <pre style={pre}>{t.full_text}</pre>
+              <div>
+                <div style={inputLabel}>Speaker mapping</div>
+                <textarea
+                  value={speakerMaps[t.id] ?? ""}
+                  onChange={(e) =>
+                    setSpeakerMaps((prev) => ({
+                      ...prev,
+                      [t.id]: e.target.value,
+                    }))
+                  }
+                  placeholder={`예:\nA = 김현우 교수님\nB = 서진우\nC = 진승완 박사님`}
+                  style={textarea}
+                />
+                <div style={{ marginTop: 6, fontSize: 12, color: "#64748b" }}>
+                  입력한 speaker mapping은 rewrite 때 A/B/C 라벨을 실제 이름으로 치환하는 데 사용됩니다.
+                </div>
+              </div>
 
-              {t.refined_text && (
+              <details style={rawDetails}>
+                <summary style={rawSummary}>Show raw transcript</summary>
+                <div style={{ marginTop: 10 }}>
+                  <pre style={pre}>{t.full_text}</pre>
+                </div>
+              </details>
+
+              {t.refined_text ? (
                 <>
-                  <div style={{ fontWeight: 800, marginTop: 6 }}>
+                  <div style={{ fontWeight: 800, marginTop: 2 }}>
                     Refined transcript
                   </div>
-                  <pre
-                    style={{
-                      ...pre,
-                      background: "#f0fdf4",
-                      borderColor: "#bbf7d0",
-                    }}
-                  >
-                    {t.refined_text}
-                  </pre>
+
+                  <pre style={refinedScrollBox}>{t.refined_text}</pre>
+
                   {t.refined_at && (
                     <div style={{ color: "#64748b", fontSize: 12 }}>
                       refined at {new Date(t.refined_at).toLocaleString()}
                     </div>
                   )}
                 </>
+              ) : (
+                <div
+                  style={{
+                    padding: 14,
+                    borderRadius: 10,
+                    border: "1px dashed #d5dce6",
+                    color: "#94a3b8",
+                    fontSize: 13,
+                    textAlign: "center",
+                  }}
+                >
+                  Speaker mapping을 입력한 뒤 Rewrite with notes를 실행하면 refined transcript가 생성됩니다.
+                </div>
               )}
             </div>
           ))

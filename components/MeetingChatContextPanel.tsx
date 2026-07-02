@@ -12,6 +12,13 @@ type SelectionRow = {
   chat_id: string;
 };
 
+type ChatMessageRow = {
+  chat_id: string;
+  role: string;
+  content: string;
+  created_at?: string | null;
+};
+
 const card: React.CSSProperties = {
   background: "#fff",
   border: "1px solid #e4e8ef",
@@ -45,6 +52,17 @@ const primaryButton: React.CSSProperties = {
   borderColor: "#111827",
 };
 
+const input: React.CSSProperties = {
+  width: "100%",
+  border: "1px solid #d8dee7",
+  borderRadius: 9,
+  padding: "8px 10px",
+  fontSize: 13,
+  color: "#1b2231",
+  outline: "none",
+  background: "#fbfcfe",
+};
+
 function shortId(id: string): string {
   return id.slice(0, 8);
 }
@@ -64,21 +82,87 @@ function isMissingChatSchemaError(message: string | undefined): boolean {
   if (!message) return false;
   const lower = message.toLowerCase();
   return (
-    (lower.includes("chat_sessions") || lower.includes("meeting_chat_context_selections")) &&
+    (lower.includes("chat_sessions") ||
+      lower.includes("chat_messages") ||
+      lower.includes("meeting_chat_context_selections")) &&
     (lower.includes("could not find the table") ||
       lower.includes("schema cache") ||
       lower.includes("pgrst205"))
   );
 }
 
+function parseKeywords(text: string): string[] {
+  return text
+    .split(/[,\s]+/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function compact(text: string, max = 180): string {
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  if (cleaned.length <= max) return cleaned;
+  return `${cleaned.slice(0, max).trimEnd()}...`;
+}
+
+function sessionBlob(
+  session: ChatSession,
+  messages: ChatMessageRow[]
+): string {
+  return [
+    session.id,
+    session.title ?? "",
+    modeLabel(session.mode),
+    ...messages.map((message) => `${message.role}: ${message.content}`),
+  ]
+    .join("\n")
+    .toLowerCase();
+}
+
+function matchedSnippet(
+  messages: ChatMessageRow[],
+  keywords: string[]
+): string | null {
+  if (messages.length === 0) return null;
+
+  if (keywords.length > 0) {
+    const matched = messages.find((message) => {
+      const content = message.content.toLowerCase();
+      return keywords.some((keyword) => content.includes(keyword));
+    });
+
+    if (matched) {
+      return `${matched.role}: ${compact(matched.content)}`;
+    }
+  }
+
+  const last = messages[messages.length - 1];
+  return last ? `${last.role}: ${compact(last.content)}` : null;
+}
+
 export function MeetingChatContextPanel({ meetingId }: Props) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [messagesByChatId, setMessagesByChatId] = useState<
+    Record<string, ChatMessageRow[]>
+  >({});
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [savedIds, setSavedIds] = useState<string[]>([]);
+  const [filterText, setFilterText] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+
+  const keywords = useMemo(() => parseKeywords(filterText), [filterText]);
+
+  const filteredSessions = useMemo(() => {
+    if (keywords.length === 0) return sessions;
+
+    return sessions.filter((session) => {
+      const messages = messagesByChatId[session.id] ?? [];
+      const blob = sessionBlob(session, messages);
+      return keywords.some((keyword) => blob.includes(keyword));
+    });
+  }, [sessions, messagesByChatId, keywords]);
 
   const hasChanges = useMemo(() => {
     const selected = [...selectedIds].sort().join(",");
@@ -118,16 +202,41 @@ export function MeetingChatContextPanel({ meetingId }: Props) {
         if (sessionResult.error) throw sessionResult.error;
         if (selectionResult.error) throw selectionResult.error;
 
+        const sessionRows = sessionResult.data ?? [];
         const ids = (selectionResult.data ?? []).map((row) => row.chat_id);
+        const chatIds = sessionRows.map((session) => session.id);
+
+        let groupedMessages: Record<string, ChatMessageRow[]> = {};
+
+        if (chatIds.length > 0) {
+          const messageResult = await supabase
+            .from("chat_messages")
+            .select("chat_id,role,content,created_at")
+            .in("chat_id", chatIds)
+            .order("created_at", { ascending: true })
+            .returns<ChatMessageRow[]>();
+
+          if (messageResult.error) throw messageResult.error;
+
+          groupedMessages = (messageResult.data ?? []).reduce<
+            Record<string, ChatMessageRow[]>
+          >((acc, message) => {
+            acc[message.chat_id] = acc[message.chat_id] ?? [];
+            acc[message.chat_id].push(message);
+            return acc;
+          }, {});
+        }
 
         if (alive) {
-          setSessions(sessionResult.data ?? []);
+          setSessions(sessionRows);
+          setMessagesByChatId(groupedMessages);
           setSelectedIds(ids);
           setSavedIds(ids);
         }
       } catch (err: any) {
         if (alive) {
-          const message = err?.message ?? "Failed to load chat context selections.";
+          const message =
+            err?.message ?? "Failed to load chat context selections.";
           setError(
             isMissingChatSchemaError(message)
               ? "Chat context tables are not applied yet. Run supabase-rag-schema.sql, then reload this page."
@@ -149,7 +258,9 @@ export function MeetingChatContextPanel({ meetingId }: Props) {
   function toggle(id: string) {
     setStatus(null);
     setSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+      prev.includes(id)
+        ? prev.filter((item) => item !== id)
+        : [...prev, id]
     );
   }
 
@@ -219,6 +330,46 @@ export function MeetingChatContextPanel({ meetingId }: Props) {
           </div>
         )}
 
+        <div style={{ display: "grid", gap: 7 }}>
+          <input
+            value={filterText}
+            onChange={(event) => setFilterText(event.target.value)}
+            placeholder="Filter chats by keyword, e.g. surrogate BM25"
+            style={input}
+          />
+          <div
+            className="mono"
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 8,
+              fontSize: 10.5,
+              color: "#94a3b8",
+            }}
+          >
+            <span>
+              showing {filteredSessions.length} / {sessions.length}
+            </span>
+            {filterText.trim() && (
+              <button
+                type="button"
+                onClick={() => setFilterText("")}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "#3550c7",
+                  cursor: "pointer",
+                  padding: 0,
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                }}
+              >
+                clear
+              </button>
+            )}
+          </div>
+        </div>
+
         {loading ? (
           <div className="mono" style={{ fontSize: 12, color: "#94a3b8" }}>
             loading chats...
@@ -227,10 +378,16 @@ export function MeetingChatContextPanel({ meetingId }: Props) {
           <div style={{ color: "#64748b", fontSize: 13 }}>
             저장된 채팅이 없습니다.
           </div>
+        ) : filteredSessions.length === 0 ? (
+          <div style={{ color: "#64748b", fontSize: 13 }}>
+            해당 키워드를 포함한 채팅이 없습니다.
+          </div>
         ) : (
-          <div style={{ display: "grid", gap: 8 }}>
-            {sessions.map((session) => {
+          <div style={{ display: "grid", gap: 8, maxHeight: 420, overflow: "auto" }}>
+            {filteredSessions.map((session) => {
               const checked = selectedIds.includes(session.id);
+              const messages = messagesByChatId[session.id] ?? [];
+              const snippet = matchedSnippet(messages, keywords);
 
               return (
                 <label
@@ -275,7 +432,14 @@ export function MeetingChatContextPanel({ meetingId }: Props) {
                       >
                         {session.title || "Untitled chat"}
                       </span>
-                      <span className="mono" style={{ flex: "none", fontSize: 10.5, color: "#3550c7" }}>
+                      <span
+                        className="mono"
+                        style={{
+                          flex: "none",
+                          fontSize: 10.5,
+                          color: "#3550c7",
+                        }}
+                      >
                         {modeLabel(session.mode)}
                       </span>
                     </span>
@@ -291,8 +455,23 @@ export function MeetingChatContextPanel({ meetingId }: Props) {
                         whiteSpace: "nowrap",
                       }}
                     >
-                      chat_{shortId(session.id)} · {formatDate(session.updated_at ?? session.created_at)}
+                      chat_{shortId(session.id)} ·{" "}
+                      {formatDate(session.updated_at ?? session.created_at)}
                     </span>
+
+                    {snippet && (
+                      <span
+                        style={{
+                          display: "block",
+                          marginTop: 6,
+                          color: "#64748b",
+                          fontSize: 12,
+                          lineHeight: 1.45,
+                        }}
+                      >
+                        {snippet}
+                      </span>
+                    )}
                   </span>
                 </label>
               );
@@ -300,8 +479,18 @@ export function MeetingChatContextPanel({ meetingId }: Props) {
           </div>
         )}
 
-        <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between" }}>
-          <span className="mono" style={{ fontSize: 11, color: status ? "#16a34a" : "#94a3b8" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            justifyContent: "space-between",
+          }}
+        >
+          <span
+            className="mono"
+            style={{ fontSize: 11, color: status ? "#16a34a" : "#94a3b8" }}
+          >
             {status ?? (hasChanges ? "unsaved changes" : "ready")}
           </span>
           <button

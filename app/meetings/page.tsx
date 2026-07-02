@@ -2,10 +2,11 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { weekday } from "@/lib/format";
 import type { Meeting } from "@/lib/types";
+import { DeleteMeetingButton } from "@/components/DeleteMeetingButton";
 
 export const dynamic = "force-dynamic";
 
-const grid = "1fr 150px 220px";
+const grid = "1fr 150px 220px 90px";
 
 export default async function MeetingsListPage() {
   const { data, error } = await supabase
@@ -18,8 +19,15 @@ export default async function MeetingsListPage() {
   const meetings = data ?? [];
 
   return (
-    <div style={{ width: "100%", height: "100%", overflow: "auto", padding: "40px 30px 80px" }}>
-      <div style={{ maxWidth: 940, margin: "0 auto" }}>
+    <div
+      style={{
+        width: "100%",
+        height: "100%",
+        overflow: "auto",
+        padding: "40px 30px 80px",
+      }}
+    >
+      <div style={{ maxWidth: 1040, margin: "0 auto" }}>
         <div
           style={{
             display: "flex",
@@ -31,14 +39,27 @@ export default async function MeetingsListPage() {
           <div>
             <div
               className="mono"
-              style={{ fontSize: 11, color: "#8a93a3", letterSpacing: ".04em", marginBottom: 6 }}
+              style={{
+                fontSize: 11,
+                color: "#8a93a3",
+                letterSpacing: ".04em",
+                marginBottom: 6,
+              }}
             >
               ALL SESSIONS
             </div>
-            <h1 style={{ fontSize: 26, fontWeight: 700, letterSpacing: "-.02em", margin: 0 }}>
+            <h1
+              style={{
+                fontSize: 26,
+                fontWeight: 700,
+                letterSpacing: "-.02em",
+                margin: 0,
+              }}
+            >
               회의 목록
             </h1>
           </div>
+
           <Link
             href="/meetings/new"
             style={{
@@ -99,10 +120,18 @@ export default async function MeetingsListPage() {
             <div>제목 · 프로젝트</div>
             <div>날짜</div>
             <div>참여자</div>
+            <div style={{ textAlign: "right" }}>관리</div>
           </div>
 
           {meetings.length === 0 ? (
-            <div style={{ padding: "40px 20px", textAlign: "center", color: "#aab2c0", fontSize: 14 }}>
+            <div
+              style={{
+                padding: "40px 20px",
+                textAlign: "center",
+                color: "#aab2c0",
+                fontSize: 14,
+              }}
+            >
               아직 회의가 없습니다.{" "}
               <Link href="/meetings/new" style={{ color: "#3550c7" }}>
                 새 회의를 시작
@@ -111,9 +140,8 @@ export default async function MeetingsListPage() {
             </div>
           ) : (
             meetings.map((m) => (
-              <Link
+              <div
                 key={m.id}
-                href={`/meetings/${m.id}`}
                 style={{
                   display: "grid",
                   gridTemplateColumns: grid,
@@ -121,24 +149,34 @@ export default async function MeetingsListPage() {
                   padding: "15px 20px",
                   borderBottom: "1px solid #f1f3f7",
                   alignItems: "center",
-                  textDecoration: "none",
                   color: "inherit",
                 }}
               >
                 <div style={{ minWidth: 0 }}>
-                  <div
+                  <Link
+                    href={`/meetings/${m.id}`}
                     style={{
-                      fontWeight: 600,
-                      fontSize: 15,
-                      color: "#1b2231",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      marginBottom: 5,
+                      display: "block",
+                      textDecoration: "none",
+                      color: "inherit",
+                      minWidth: 0,
                     }}
                   >
-                    {m.title}
-                  </div>
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        fontSize: 15,
+                        color: "#1b2231",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        marginBottom: 5,
+                      }}
+                    >
+                      {m.title}
+                    </div>
+                  </Link>
+
                   <span
                     className="mono"
                     style={{
@@ -156,32 +194,76 @@ export default async function MeetingsListPage() {
                     {m.project_tag ?? "미분류"}
                   </span>
                 </div>
-                <div>
-                  <div className="mono" style={{ fontSize: 13, color: "#3a4252", fontWeight: 500 }}>
-                    {m.date}
-                  </div>
-                  <div className="mono" style={{ fontSize: 11, color: "#aab2c0", marginTop: 2 }}>
-                    ({weekday(m.date)})
-                  </div>
-                </div>
-                <div
+
+                <Link
+                  href={`/meetings/${m.id}`}
                   style={{
-                    fontSize: 12.5,
-                    color: "#6b7482",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
+                    textDecoration: "none",
+                    color: "inherit",
                   }}
                 >
-                  {(m.participants ?? []).join(", ")}
+                  <div
+                    className="mono"
+                    style={{
+                      fontSize: 13,
+                      color: "#3a4252",
+                      fontWeight: 500,
+                    }}
+                  >
+                    {m.date}
+                  </div>
+                  <div
+                    className="mono"
+                    style={{
+                      fontSize: 11,
+                      color: "#aab2c0",
+                      marginTop: 2,
+                    }}
+                  >
+                    ({weekday(m.date)})
+                  </div>
+                </Link>
+
+                <Link
+                  href={`/meetings/${m.id}`}
+                  style={{
+                    textDecoration: "none",
+                    color: "inherit",
+                    minWidth: 0,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 12.5,
+                      color: "#6b7482",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {(m.participants ?? []).join(", ")}
+                  </div>
+                </Link>
+
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <DeleteMeetingButton
+                    meetingId={m.id}
+                    meetingTitle={m.title}
+                  />
                 </div>
-              </Link>
+              </div>
             ))
           )}
         </div>
+
         <div
           className="mono"
-          style={{ fontSize: 11, color: "#aab2c0", marginTop: 14, textAlign: "right" }}
+          style={{
+            fontSize: 11,
+            color: "#aab2c0",
+            marginTop: 14,
+            textAlign: "right",
+          }}
         >
           ↑ 검색이 안 될 땐 여기서 직접 훑어보세요
         </div>

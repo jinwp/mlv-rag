@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { isSupabaseConfigured, supabase } from "@/lib/supabaseClient";
 import type { AskHistoryMessage, AskMode, AskResponse, AskSource } from "@/lib/types";
 
 type UserMsg = { role: "user"; text: string };
@@ -27,11 +28,24 @@ type AskApiResponse = AskResponse & {
   error?: string;
 };
 
-const EXAMPLES = [
-  "GSM8K 대신 TFQA-MC를 쓰기로 한 이유가 뭐였지?",
-  "지난달 로봇팔 실험에서 뭘 결정했지?",
-  "SBQ 논문 camera-ready 관련 TODO가 뭐였지?",
-];
+type ChatSessionRow = {
+  id: string;
+  title: string | null;
+  mode: AskMode | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type ChatMessageRow = {
+  id: string;
+  chat_id: string;
+  role: "user" | "assistant" | string;
+  content: string;
+  mode?: AskMode | null;
+  sources?: unknown;
+  metadata?: Record<string, unknown> | null;
+  created_at?: string | null;
+};
 
 const MODE_OPTIONS: { key: AskMode; label: string }[] = [
   { key: "rag", label: "RAG" },
@@ -39,8 +53,26 @@ const MODE_OPTIONS: { key: AskMode; label: string }[] = [
   { key: "plain", label: "Plain" },
 ];
 
-function modeLabel(mode?: AskMode): string {
+function modeLabel(mode?: AskMode | null): string {
   return MODE_OPTIONS.find((option) => option.key === mode)?.label ?? "RAG";
+}
+
+function shortId(id: string): string {
+  return id.slice(0, 8);
+}
+
+function formatDate(value?: string | null): string {
+  if (!value) return "no date";
+  return new Date(value).toLocaleString();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function normalizeSources(value: unknown): AskSource[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord) as unknown as AskSource[];
 }
 
 const mdComponents = {
@@ -48,7 +80,16 @@ const mdComponents = {
     <p style={{ margin: "0 0 12px" }} {...props} />
   ),
   ul: (props: React.HTMLAttributes<HTMLUListElement>) => (
-    <ul style={{ margin: "0 0 12px", paddingLeft: 18, display: "flex", flexDirection: "column", gap: 7 }} {...props} />
+    <ul
+      style={{
+        margin: "0 0 12px",
+        paddingLeft: 18,
+        display: "flex",
+        flexDirection: "column",
+        gap: 7,
+      }}
+      {...props}
+    />
   ),
   li: (props: React.HTMLAttributes<HTMLLIElement>) => (
     <li style={{ lineHeight: 1.6 }} {...props} />
@@ -65,7 +106,9 @@ const mdComponents = {
         onClick={(event) => {
           if (!isSourceLink) return;
           event.preventDefault();
-          document.getElementById(href.slice(1))?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          document
+            .getElementById(href.slice(1))
+            ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
         }}
         style={
           isSourceLink
@@ -108,6 +151,11 @@ export default function AskPage() {
   const [draft, setDraft] = useState("");
   const [mode, setMode] = useState<AskMode>("rag");
   const [chatId, setChatId] = useState<string | null>(null);
+  const [recentChats, setRecentChats] = useState<ChatSessionRow[]>([]);
+  const [recentChatsOpen, setRecentChatsOpen] = useState(true);
+  const [recentLoading, setRecentLoading] = useState(false);
+  const [recentError, setRecentError] = useState("");
+  const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
   const chatRef = useRef<HTMLDivElement>(null);
 
   const hasMessages = messages.length > 0;
@@ -116,10 +164,98 @@ export default function AskPage() {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
   }, [messages]);
 
+  useEffect(() => {
+    void loadRecentChats();
+  }, []);
+
+  async function loadRecentChats() {
+    setRecentLoading(true);
+    setRecentError("");
+
+    if (!isSupabaseConfigured) {
+      setRecentChats([]);
+      setRecentError("Supabase env vars are missing.");
+      setRecentLoading(false);
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from("chat_sessions")
+        .select("id,title,mode,created_at,updated_at")
+        .order("updated_at", { ascending: false })
+        .limit(20)
+        .returns<ChatSessionRow[]>();
+
+      if (error) throw error;
+      setRecentChats(data ?? []);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load recent chats.";
+      setRecentError(message);
+      setRecentChats([]);
+    } finally {
+      setRecentLoading(false);
+    }
+  }
+
+  async function loadChatSession(session: ChatSessionRow) {
+    if (!isSupabaseConfigured) return;
+
+    setLoadingSessionId(session.id);
+    setRecentError("");
+
+    try {
+      const { data, error } = await supabase
+        .from("chat_messages")
+        .select("id,chat_id,role,content,mode,sources,metadata,created_at")
+        .eq("chat_id", session.id)
+        .order("created_at", { ascending: true })
+        .returns<ChatMessageRow[]>();
+
+      if (error) throw error;
+
+      const rows = data ?? [];
+      const loadedMessages = rows.reduce<Msg[]>((items, row) => {
+        if (row.role === "user") {
+          items.push({ role: "user", text: row.content });
+        } else if (row.role === "assistant") {
+          items.push({
+            role: "assistant",
+            answer: row.content,
+            sources: normalizeSources(row.sources),
+            sourcesOpen: false,
+            mode: row.mode ?? session.mode ?? "rag",
+          });
+        }
+        return items;
+      }, []);
+
+      setChatId(session.id);
+      setMode(session.mode ?? "rag");
+      setDraft("");
+      setMessages(loadedMessages);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load chat messages.";
+      setRecentError(message);
+    } finally {
+      setLoadingSessionId(null);
+    }
+  }
+
+  function startNewChat() {
+    setMessages([]);
+    setDraft("");
+    setChatId(null);
+    setMode("rag");
+    setRecentChatsOpen(true);
+    void loadRecentChats();
+  }
+
   async function send(q?: string) {
     const text = (q ?? draft).trim();
     if (!text) return;
     const requestMode = mode;
+    const requestChatId = chatId;
     const history = messages.reduce<AskHistoryMessage[]>((items, message) => {
       if (message.role === "user") {
         items.push({ role: "user", content: message.text });
@@ -140,7 +276,7 @@ export default function AskPage() {
       const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: text, mode: requestMode, history, chatId }),
+        body: JSON.stringify({ question: text, mode: requestMode, history, chatId: requestChatId }),
       });
       const data: AskApiResponse = await res.json();
       if (data.chat_id) setChatId(data.chat_id);
@@ -171,6 +307,7 @@ export default function AskPage() {
         }
         return next;
       });
+      void loadRecentChats();
     } catch {
       setMessages((prev) => {
         const next = [...prev];
@@ -293,10 +430,173 @@ export default function AskPage() {
     </div>
   );
 
+  const recentChatList = (
+    <div style={{ marginTop: 22, textAlign: "left" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+          marginBottom: 10,
+        }}
+      >
+        <div
+          className="mono"
+          style={{ fontSize: 11, color: "#aab2c0", letterSpacing: ".03em" }}
+        >
+          RECENT CHATS
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+          <button
+            type="button"
+            onClick={() => void loadRecentChats()}
+            className="mono"
+            style={{
+              border: "none",
+              background: "transparent",
+              color: "#3550c7",
+              fontSize: 11,
+              fontWeight: 700,
+              cursor: "pointer",
+              padding: 0,
+            }}
+          >
+            refresh
+          </button>
+          <button
+            type="button"
+            onClick={() => setRecentChatsOpen((current) => !current)}
+            className="mono"
+            style={{
+              border: "none",
+              background: "transparent",
+              color: "#64748b",
+              fontSize: 11,
+              fontWeight: 700,
+              cursor: "pointer",
+              padding: 0,
+            }}
+          >
+            {recentChatsOpen ? "hide" : "show"}
+          </button>
+        </div>
+      </div>
+
+      {recentChatsOpen && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {recentError && (
+            <div
+              style={{
+                border: "1px solid #fed7aa",
+                background: "#fff7ed",
+                color: "#9a3412",
+                borderRadius: 10,
+                padding: "11px 13px",
+                fontSize: 13,
+                lineHeight: 1.45,
+              }}
+            >
+              {recentError}
+            </div>
+          )}
+
+          {recentLoading ? (
+            <div className="mono" style={{ padding: 14, color: "#9aa3b2", fontSize: 12 }}>
+              loading recent chats...
+            </div>
+          ) : recentChats.length === 0 ? (
+            <div
+              style={{
+                border: "1px dashed #d5dce6",
+                borderRadius: 10,
+                padding: "14px 15px",
+                color: "#94a3b8",
+                fontSize: 13,
+                textAlign: "center",
+              }}
+            >
+              저장된 채팅이 없습니다. 새 질문을 보내면 여기에 표시됩니다.
+            </div>
+          ) : (
+            recentChats.map((session) => {
+              const active = chatId === session.id;
+              return (
+                <button
+                  key={session.id}
+                  type="button"
+                  onClick={() => loadChatSession(session)}
+                  disabled={loadingSessionId === session.id}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr auto",
+                    gap: 12,
+                    alignItems: "center",
+                    textAlign: "left",
+                    border: `1px solid ${active ? "#c8d2f5" : "#e4e8ef"}`,
+                    background: active ? "#f5f7ff" : "#fff",
+                    borderRadius: 10,
+                    padding: "12px 15px",
+                    cursor: loadingSessionId === session.id ? "default" : "pointer",
+                    opacity: loadingSessionId === session.id ? 0.65 : 1,
+                  }}
+                >
+                  <span style={{ minWidth: 0 }}>
+                    <span
+                      style={{
+                        display: "block",
+                        color: "#1f2937",
+                        fontSize: 14,
+                        fontWeight: 700,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        marginBottom: 4,
+                      }}
+                    >
+                      {session.title || "Untitled chat"}
+                    </span>
+                    <span
+                      className="mono"
+                      style={{
+                        display: "block",
+                        color: "#94a3b8",
+                        fontSize: 11,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      chat_{shortId(session.id)} · {formatDate(session.updated_at ?? session.created_at)}
+                    </span>
+                  </span>
+                  <span
+                    className="mono"
+                    style={{
+                      flex: "none",
+                      border: "1px solid #dde3f7",
+                      background: "#eef1fc",
+                      color: "#3550c7",
+                      borderRadius: 6,
+                      padding: "3px 7px",
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {loadingSessionId === session.id ? "loading" : modeLabel(session.mode)}
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       {!hasMessages ? (
-        // ---- HERO (empty) ----
         <div
           style={{
             flex: 1,
@@ -333,48 +633,51 @@ export default function AskPage() {
             </p>
 
             {composer("hero")}
-
-            <div style={{ marginTop: 22, textAlign: "left" }}>
-              <div
-                className="mono"
-                style={{ fontSize: 11, color: "#aab2c0", letterSpacing: ".03em", marginBottom: 10 }}
-              >
-                EXAMPLES
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {EXAMPLES.map((q) => (
-                  <button
-                    key={q}
-                    type="button"
-                    onClick={() => send(q)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 11,
-                      textAlign: "left",
-                      border: "1px solid #e4e8ef",
-                      background: "#fff",
-                      borderRadius: 10,
-                      padding: "12px 15px",
-                      cursor: "pointer",
-                      fontSize: 14,
-                      color: "#3a4252",
-                      lineHeight: 1.4,
-                    }}
-                  >
-                    <span className="mono" style={{ flex: "none", color: "#c2cad6" }}>
-                      ?
-                    </span>
-                    {q}
-                  </button>
-                ))}
-              </div>
-            </div>
+            {recentChatList}
           </div>
         </div>
       ) : (
-        // ---- CHAT (active) ----
         <>
+          <div
+            style={{
+              flex: "none",
+              borderBottom: "1px solid #e4e8ef",
+              background: "#fbfcfe",
+              padding: "10px 24px",
+            }}
+          >
+            <div
+              style={{
+                maxWidth: 760,
+                margin: "0 auto",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 12,
+              }}
+            >
+              <div className="mono" style={{ fontSize: 11, color: "#94a3b8" }}>
+                {chatId ? `chat_${shortId(chatId)}` : "unsaved chat"}
+              </div>
+              <button
+                type="button"
+                onClick={startNewChat}
+                style={{
+                  border: "1px solid #d8dee7",
+                  background: "#fff",
+                  color: "#3550c7",
+                  borderRadius: 8,
+                  padding: "6px 10px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                새 채팅 / 최근 채팅 보기
+              </button>
+            </div>
+          </div>
+
           <div ref={chatRef} style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "30px 24px 20px" }}>
             <div style={{ maxWidth: 760, margin: "0 auto", display: "flex", flexDirection: "column", gap: 26 }}>
               {messages.map((m, i) =>
@@ -499,114 +802,114 @@ export default function AskPage() {
                                   const label = s.label ?? `근거 ${si + 1}`;
                                   const isWeb = s.type === "web";
                                   return (
-                                  <div
-                                    key={si}
-                                    id={askSourceId(i, si)}
-                                    style={{
-                                      border: "1px solid #e4e8ef",
-                                      borderRadius: 10,
-                                      background: "#fff",
-                                      padding: "14px 15px",
-                                    }}
-                                  >
                                     <div
+                                      key={si}
+                                      id={askSourceId(i, si)}
                                       style={{
-                                        display: "flex",
-                                        alignItems: "center",
-                                        gap: 9,
-                                        marginBottom: 8,
-                                        flexWrap: "wrap",
-                                      }}
-                                    >
-                                      <span
-                                        className="mono"
-                                        style={{
-                                          flex: "none",
-                                          height: 20,
-                                          borderRadius: 5,
-                                          background: "#3550c7",
-                                          color: "#fff",
-                                          fontSize: 11,
-                                          fontWeight: 600,
-                                          display: "flex",
-                                          alignItems: "center",
-                                          justifyContent: "center",
-                                          padding: isWeb ? "0 6px" : 0,
-                                          width: isWeb ? "auto" : 20,
-                                        }}
-                                      >
-                                        {label.replace("근거 ", "")}
-                                      </span>
-                                      <span style={{ fontWeight: 600, fontSize: 13.5, color: "#1b2231" }}>
-                                        {isWeb ? s.title ?? "웹 출처" : s.title ?? "회의 근거"}
-                                      </span>
-                                    </div>
-                                    <div
-                                      style={{
-                                        fontSize: 13,
-                                        lineHeight: 1.55,
-                                        color: "#6b7482",
-                                        marginBottom: 10,
-                                      }}
-                                    >
-                                      {s.reason}
-                                    </div>
-                                    <div
-                                      style={{
-                                        borderLeft: "2px solid #3550c7",
-                                        padding: "2px 0 2px 12px",
-                                        marginBottom: 11,
+                                        border: "1px solid #e4e8ef",
+                                        borderRadius: 10,
+                                        background: "#fff",
+                                        padding: "14px 15px",
                                       }}
                                     >
                                       <div
                                         style={{
-                                          fontSize: 13.5,
-                                          lineHeight: 1.55,
-                                          color: "#25303f",
-                                          fontStyle: "italic",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: 9,
+                                          marginBottom: 8,
+                                          flexWrap: "wrap",
                                         }}
                                       >
-                                        {isWeb ? s.url ?? s.text : `"` + s.text + `"`}
+                                        <span
+                                          className="mono"
+                                          style={{
+                                            flex: "none",
+                                            height: 20,
+                                            borderRadius: 5,
+                                            background: "#3550c7",
+                                            color: "#fff",
+                                            fontSize: 11,
+                                            fontWeight: 600,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            padding: isWeb ? "0 6px" : 0,
+                                            width: isWeb ? "auto" : 20,
+                                          }}
+                                        >
+                                          {label.replace("근거 ", "")}
+                                        </span>
+                                        <span style={{ fontWeight: 600, fontSize: 13.5, color: "#1b2231" }}>
+                                          {isWeb ? s.title ?? "웹 출처" : s.title ?? "회의 근거"}
+                                        </span>
                                       </div>
+                                      <div
+                                        style={{
+                                          fontSize: 13,
+                                          lineHeight: 1.55,
+                                          color: "#6b7482",
+                                          marginBottom: 10,
+                                        }}
+                                      >
+                                        {s.reason}
+                                      </div>
+                                      <div
+                                        style={{
+                                          borderLeft: "2px solid #3550c7",
+                                          padding: "2px 0 2px 12px",
+                                          marginBottom: 11,
+                                        }}
+                                      >
+                                        <div
+                                          style={{
+                                            fontSize: 13.5,
+                                            lineHeight: 1.55,
+                                            color: "#25303f",
+                                            fontStyle: "italic",
+                                          }}
+                                        >
+                                          {isWeb ? s.url ?? s.text : `"${s.text}"`}
+                                        </div>
+                                      </div>
+                                      {isWeb && s.url ? (
+                                        <a
+                                          href={s.url}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          style={{
+                                            color: "#3550c7",
+                                            fontSize: 13,
+                                            fontWeight: 600,
+                                            textDecoration: "none",
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            gap: 5,
+                                          }}
+                                        >
+                                          웹 출처 열기 →
+                                        </a>
+                                      ) : s.meeting_id ? (
+                                        <Link
+                                          href={`/meetings/${s.meeting_id}`}
+                                          style={{
+                                            color: "#3550c7",
+                                            fontSize: 13,
+                                            fontWeight: 600,
+                                            textDecoration: "none",
+                                            display: "inline-flex",
+                                            alignItems: "center",
+                                            gap: 5,
+                                          }}
+                                        >
+                                          회의 상세 보기 →
+                                        </Link>
+                                      ) : (
+                                        <span className="mono" style={{ fontSize: 12, color: "#aab2c0" }}>
+                                          연결된 회의 없음
+                                        </span>
+                                      )}
                                     </div>
-                                    {isWeb && s.url ? (
-                                      <a
-                                        href={s.url}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        style={{
-                                          color: "#3550c7",
-                                          fontSize: 13,
-                                          fontWeight: 600,
-                                          textDecoration: "none",
-                                          display: "inline-flex",
-                                          alignItems: "center",
-                                          gap: 5,
-                                        }}
-                                      >
-                                        웹 출처 열기 →
-                                      </a>
-                                    ) : s.meeting_id ? (
-                                      <Link
-                                        href={`/meetings/${s.meeting_id}`}
-                                        style={{
-                                          color: "#3550c7",
-                                          fontSize: 13,
-                                          fontWeight: 600,
-                                          textDecoration: "none",
-                                          display: "inline-flex",
-                                          alignItems: "center",
-                                          gap: 5,
-                                        }}
-                                      >
-                                        회의 상세 보기 →
-                                      </Link>
-                                    ) : (
-                                      <span className="mono" style={{ fontSize: 12, color: "#aab2c0" }}>
-                                        연결된 회의 없음
-                                      </span>
-                                    )}
-                                  </div>
                                   );
                                 })}
                               </div>
@@ -621,7 +924,6 @@ export default function AskPage() {
             </div>
           </div>
 
-          {/* bottom input */}
           <div
             style={{
               flex: "none",

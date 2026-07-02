@@ -1,7 +1,5 @@
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
-import { loadMemoryChunks } from "@/lib/rag/loadMemory";
-import { rankMemoryChunks } from "@/lib/rag/retrieval";
 import type {
   MemorySearchResult,
   RagChatMessage,
@@ -13,7 +11,13 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
-const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
+const DEFAULT_OPENAI_MODEL = "gpt-5.5";
+const MAX_PROVIDED_SOURCES = 50;
+
+type ReasoningOnlyRagChatRequest = RagChatRequest & {
+  meetingId?: string;
+  sources?: MemorySearchResult[];
+};
 
 type OpenAIResponsePayload = {
   output_text?: unknown;
@@ -34,13 +38,18 @@ function cleanId(value: string | undefined, prefix: string): string {
 
 function secondsLabel(start?: number | null, end?: number | null): string {
   if (start === null || start === undefined) return "no timestamp";
+
   const fmt = (seconds: number) => {
     const rounded = Math.max(0, Math.floor(seconds));
     const minutes = Math.floor(rounded / 60);
     const rest = rounded % 60;
     return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
   };
-  if (end !== null && end !== undefined && end !== start) return `${fmt(start)}-${fmt(end)}`;
+
+  if (end !== null && end !== undefined && end !== start) {
+    return `${fmt(start)}-${fmt(end)}`;
+  }
+
   return fmt(start);
 }
 
@@ -49,8 +58,19 @@ function safeSnippet(text: string, max = 1200): string {
   return compact.length > max ? `${compact.slice(0, max)}...` : compact;
 }
 
+function safeEvidenceContent(text: string, max = 1800): string {
+  const cleaned = text
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return cleaned.length > max ? `${cleaned.slice(0, max).trimEnd()}...` : cleaned;
+}
+
 function sanitizeHistory(history: RagChatMessage[] | undefined): RagChatMessage[] {
   if (!Array.isArray(history)) return [];
+
   return history
     .filter(
       (message) =>
@@ -67,7 +87,41 @@ function sanitizeHistory(history: RagChatMessage[] | undefined): RagChatMessage[
     }));
 }
 
-function buildConversationContext(chatId: string, userMessageId: string, history: RagChatMessage[]): string {
+function isProvidedSource(value: unknown): value is MemorySearchResult {
+  if (!value || typeof value !== "object") return false;
+
+  const item = value as Partial<MemorySearchResult>;
+
+  return (
+    typeof item.id === "string" &&
+    typeof item.meeting_id === "string" &&
+    typeof item.content === "string" &&
+    typeof item.memory_kind === "string" &&
+    typeof item.source_type === "string"
+  );
+}
+
+function sanitizeProvidedSources(sources: unknown): MemorySearchResult[] {
+  if (!Array.isArray(sources)) return [];
+
+  return sources
+    .filter(isProvidedSource)
+    .slice(0, MAX_PROVIDED_SOURCES)
+    .map((source) => ({
+      ...source,
+      content: safeEvidenceContent(source.content, 4000),
+      highlights: Array.isArray(source.highlights) ? source.highlights : [],
+      matched_terms: Array.isArray(source.matched_terms) ? source.matched_terms : [],
+      score: typeof source.score === "number" ? source.score : 0,
+    }));
+}
+
+function buildConversationContext(
+  chatId: string,
+  userMessageId: string,
+  history: RagChatMessage[],
+  meetingId?: string
+): string {
   const lines = history.length
     ? history.map((message) => `- ${message.id} (${message.role}): ${message.content}`)
     : ["- no previous messages"];
@@ -75,13 +129,15 @@ function buildConversationContext(chatId: string, userMessageId: string, history
   return [
     `Chat session ID: ${chatId}`,
     `Current user message ID: ${userMessageId}`,
-    "Recent chat messages for summary context:",
+    meetingId ? `Selected meeting scope: ${meetingId}` : "Selected meeting scope: not specified",
+    "Evidence policy: use only the client-provided evidence chunks. Do not perform or assume any additional retrieval.",
+    "Recent chat messages:",
     ...lines,
   ].join("\n");
 }
 
 function buildEvidenceBlock(results: MemorySearchResult[]): string {
-  if (results.length === 0) return "No retrieved evidence.";
+  if (results.length === 0) return "No provided evidence.";
 
   return results
     .map((result, index) => {
@@ -90,9 +146,11 @@ function buildEvidenceBlock(results: MemorySearchResult[]): string {
       const date = result.meeting_date ?? "no-date";
       const project = result.project_tag ?? "미분류";
       const time = secondsLabel(result.start_seconds, result.end_seconds);
+
       return [
         `[${evidenceId}]`,
         `chunk_id: ${result.id}`,
+        `meeting_id: ${result.meeting_id}`,
         `meeting: ${title}`,
         `date: ${date}`,
         `project: ${project}`,
@@ -100,10 +158,11 @@ function buildEvidenceBlock(results: MemorySearchResult[]): string {
         `source: ${result.source_type}`,
         `time: ${time}`,
         `similarity_score: ${result.score.toFixed(2)}`,
-        `content: ${safeSnippet(result.content)}`,
+        `matched_terms: ${result.matched_terms.join(", ") || "none"}`,
+        `content:\n${safeEvidenceContent(result.content)}`,
       ].join("\n");
     })
-    .join("\n\n");
+    .join("\n\n---\n\n");
 }
 
 function extractOutputText(payload: OpenAIResponsePayload): string {
@@ -112,6 +171,7 @@ function extractOutputText(payload: OpenAIResponsePayload): string {
   }
 
   const texts: string[] = [];
+
   if (Array.isArray(payload.output)) {
     for (const item of payload.output) {
       if (!item || typeof item !== "object" || !("content" in item)) continue;
@@ -129,23 +189,35 @@ function extractOutputText(payload: OpenAIResponsePayload): string {
   return texts.join("\n").trim();
 }
 
-function fallbackAnswer(question: string, results: MemorySearchResult[], needsApiKey: boolean): string {
+function fallbackAnswer(
+  question: string,
+  results: MemorySearchResult[],
+  needsApiKey: boolean
+): string {
   const prefix = needsApiKey
-    ? "OPENAI_API_KEY가 서버에 설정되지 않아 LLM 호출 없이 검색 evidence만 정리했습니다."
-    : "LLM 호출에 실패해 검색 evidence만 정리했습니다.";
+    ? "OPENAI_API_KEY가 서버에 설정되지 않아 LLM 답변 없이 전달된 evidence만 정리했습니다."
+    : "LLM 호출에 실패해 전달된 evidence만 정리했습니다.";
 
   if (results.length === 0) {
-    return `${prefix}\n\n질문: ${question}\n\n현재 검색된 근거 chunk가 없습니다.`;
+    return `${prefix}\n\n질문: ${question}\n\n현재 전달된 evidence chunk가 없습니다. 먼저 Search를 실행한 뒤 Answer를 눌러야 합니다.`;
   }
 
-  const bullets = results.slice(0, 3).map((result, index) => {
+  const bullets = results.slice(0, 8).map((result, index) => {
     const title = result.meeting_title ?? result.meeting_id;
-    return `- 근거 ${index + 1}: ${title}, ${secondsLabel(result.start_seconds, result.end_seconds)}: ${
-      result.highlights[0] ?? safeSnippet(result.content, 220)
-    }`;
+    return `- 근거 ${index + 1}: ${title}, ${secondsLabel(
+      result.start_seconds,
+      result.end_seconds
+    )}: ${safeSnippet(result.content, 300)}`;
   });
 
-  return [prefix, "", `질문: ${question}`, "", "가장 관련 높은 근거:", ...bullets].join("\n");
+  return [
+    prefix,
+    "",
+    `질문: ${question}`,
+    "",
+    "전달된 근거:",
+    ...bullets,
+  ].join("\n");
 }
 
 async function callOpenAI(params: {
@@ -163,21 +235,31 @@ async function callOpenAI(params: {
     },
     body: JSON.stringify({
       model: params.model,
-      max_output_tokens: 900,
+      max_output_tokens: 1800,
       input: [
         {
           role: "developer",
-          content:
-            "You are a Lab Meeting Memory Agent. Answer in Korean. Use only the retrieved evidence. " +
-            "If the evidence is insufficient, say so explicitly. Cite evidence with labels like '(근거 1)' and never use '[E1]' style labels. " +
-            "Keep the answer concise and include decisions, reasons, TODOs, or open questions when supported.",
+          content: [
+            "You are a Lab Meeting Memory Agent.",
+            "Answer in Korean.",
+            "Use only the provided evidence chunks. Do not perform, request, or assume any additional retrieval.",
+            "Do not invent unsupported facts.",
+            "If evidence is weak, missing, or conflicting, explicitly say what is uncertain.",
+            "Cite evidence with labels like '(근거 1)', '(근거 2)'.",
+            "Give a useful reasoning-oriented answer, not just a list of chunks.",
+            "Recommended structure:",
+            "1. 결론",
+            "2. 근거 기반 분석",
+            "3. 후속 TODO 또는 확인할 점",
+            "Keep the answer concise but sufficiently analytical.",
+          ].join("\n"),
         },
         {
           role: "user",
           content: [
             params.context,
             `Current question:\n${params.question}`,
-            `Retrieved evidence:\n${params.evidence}`,
+            `Provided evidence:\n${params.evidence}`,
           ].join("\n\n"),
         },
       ],
@@ -185,8 +267,11 @@ async function callOpenAI(params: {
   });
 
   const payload = (await response.json()) as OpenAIResponsePayload;
+
   if (!response.ok) {
-    throw new Error(payload.error?.message ?? `OpenAI request failed with status ${response.status}`);
+    throw new Error(
+      payload.error?.message ?? `OpenAI request failed with status ${response.status}`
+    );
   }
 
   const answer = extractOutputText(payload);
@@ -195,7 +280,8 @@ async function callOpenAI(params: {
 }
 
 export async function POST(request: Request) {
-  let body: RagChatRequest = {};
+  let body: ReasoningOnlyRagChatRequest = {};
+
   try {
     body = await request.json();
   } catch {
@@ -205,37 +291,35 @@ export async function POST(request: Request) {
   const question = body.question?.trim();
   if (!question) return jsonError("question is required");
 
+  const meetingId = body.meetingId?.trim() || undefined;
+  const sources = sanitizeProvidedSources(body.sources);
+
+  if (sources.length === 0) {
+    return jsonError("sources are required. Run Search first and pass the displayed evidence chunks.");
+  }
+
   const chatId = cleanId(body.chatId, "chat");
   const userMessageId = cleanId(body.messageId, "user");
   const assistantMessageId = `assistant_${randomUUID()}`;
   const history = sanitizeHistory(body.history);
 
-  const loaded = await loadMemoryChunks();
-  if (loaded.memoryError && !loaded.demoMode) {
-    return jsonError(
-      "failed to read memory chunks. Did you run supabase-rag-schema.sql and index a meeting?",
-      500,
-      loaded.memoryError
-    );
-  }
-
-  const sources = rankMemoryChunks(question, loaded.chunks, {
-    limit: body.limit,
-    projectTag: body.projectTag,
-    kinds: body.kinds,
-    sortBySimilarity: body.sortBySimilarity !== false,
-  });
-
   const apiKey = process.env.OPENAI_API_KEY;
-  const model = process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
+  const model =
+    process.env.OPENAI_RAG_MODEL ||
+    process.env.OPENAI_REWRITE_MODEL ||
+    process.env.OPENAI_MODEL ||
+    DEFAULT_OPENAI_MODEL;
+
   const basePayload = {
     chatId,
     userMessageId,
     assistantMessageId,
     sources,
-    demo_mode: loaded.demoMode,
-    schema_missing: loaded.schemaMissing,
-    warning: loaded.memoryError,
+    meeting_id: meetingId ?? null,
+    provided_source_count: sources.length,
+    demo_mode: false,
+    schema_missing: false,
+    warning: undefined,
   };
 
   if (!apiKey) {
@@ -245,6 +329,7 @@ export async function POST(request: Request) {
       model: null,
       needs_api_key: true,
     };
+
     return NextResponse.json(payload);
   }
 
@@ -253,7 +338,7 @@ export async function POST(request: Request) {
       apiKey,
       model,
       question,
-      context: buildConversationContext(chatId, userMessageId, history),
+      context: buildConversationContext(chatId, userMessageId, history, meetingId),
       evidence: buildEvidenceBlock(sources),
     });
 
@@ -262,6 +347,7 @@ export async function POST(request: Request) {
       answer,
       model,
     };
+
     return NextResponse.json(payload);
   } catch (error) {
     const payload: RagChatResponse = {
@@ -269,6 +355,7 @@ export async function POST(request: Request) {
       answer: fallbackAnswer(question, sources, false),
       model,
     };
+
     return NextResponse.json(
       {
         ...payload,

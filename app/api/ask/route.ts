@@ -10,7 +10,11 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
-const MAX_LOCAL_SOURCES = 6;
+const MAX_LOCAL_SOURCES = 16;
+const RETRIEVAL_POOL_PER_QUERY = 24;
+const MAX_RETRIEVAL_QUERIES = 8;
+const MAX_SOURCES_PER_MEETING = 4;
+const QUERY_REWRITE_MAX_OUTPUT_TOKENS = 700;
 
 type AskRequest = {
   question?: string;
@@ -31,6 +35,27 @@ type ChatStorage = {
   userMessageId?: string;
   storageError?: string;
 };
+
+type RagQueryRewrite = {
+  standalone_question: string;
+  search_queries: string[];
+  entities: string[];
+  speaker_terms: string[];
+  time_hints: string[];
+};
+
+type RankedCandidate = {
+  key: string;
+  result: MemorySearchResult;
+  score: number;
+  hits: number;
+};
+
+type LoadedMemory = Awaited<ReturnType<typeof loadMemoryChunks>>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 function secondsLabel(start?: number | null, end?: number | null): string {
   if (start === null || start === undefined) return "no timestamp";
@@ -68,6 +93,70 @@ function sanitizeHistory(history: AskHistoryMessage[] | undefined): AskHistoryMe
     }));
 }
 
+function safeJsonObject(text: string): Record<string, unknown> | null {
+  const cleaned = text.trim();
+
+  try {
+    const parsed = JSON.parse(cleaned);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+
+    try {
+      const parsed = JSON.parse(match[0]);
+      return isRecord(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+function stringArray(value: unknown, max = 8): string[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter(Boolean)
+    .slice(0, max);
+}
+
+function normalizeRewrite(raw: unknown, question: string): RagQueryRewrite {
+  const obj = isRecord(raw) ? raw : {};
+
+  const standalone =
+    typeof obj.standalone_question === "string" && obj.standalone_question.trim()
+      ? obj.standalone_question.trim()
+      : question;
+
+  return {
+    standalone_question: standalone,
+    search_queries: stringArray(obj.search_queries, 5),
+    entities: stringArray(obj.entities, 8),
+    speaker_terms: stringArray(obj.speaker_terms, 5),
+    time_hints: stringArray(obj.time_hints, 5),
+  };
+}
+
+function uniqueStrings(values: string[], max = MAX_RETRIEVAL_QUERIES): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const cleaned = value.replace(/\s+/g, " ").trim();
+    const key = cleaned.toLowerCase();
+
+    if (!cleaned || seen.has(key)) continue;
+
+    seen.add(key);
+    result.push(cleaned);
+
+    if (result.length >= max) break;
+  }
+
+  return result;
+}
+
 function memorySourceLabel(index: number): string {
   return `근거 ${index + 1}`;
 }
@@ -92,48 +181,170 @@ function toAskSources(results: MemorySearchResult[]): AskSource[] {
   });
 }
 
+function resultKey(result: MemorySearchResult): string {
+  return [
+    result.meeting_id,
+    result.memory_kind,
+    result.start_seconds ?? "no-start",
+    result.end_seconds ?? "no-end",
+    result.content.slice(0, 120),
+  ].join("::");
+}
+
+function rankWithRewrittenQueries(params: {
+  queries: string[];
+  chunks: LoadedMemory["chunks"];
+  limit: number;
+}): MemorySearchResult[] {
+  const candidates = new Map<string, RankedCandidate>();
+
+  for (const query of params.queries) {
+    const ranked = rankMemoryChunks(query, params.chunks, {
+      limit: RETRIEVAL_POOL_PER_QUERY,
+      sortBySimilarity: true,
+    });
+
+    for (const result of ranked) {
+      const key = resultKey(result);
+      const existing = candidates.get(key);
+
+      if (!existing) {
+        candidates.set(key, {
+          key,
+          result,
+          score: result.score,
+          hits: 1,
+        });
+      } else {
+        existing.score = Math.max(existing.score, result.score);
+        existing.hits += 1;
+      }
+    }
+  }
+
+  const sorted = [...candidates.values()]
+    .map((candidate) => ({
+      ...candidate,
+      score: candidate.score + Math.min(candidate.hits - 1, 3) * 0.75,
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  const selected: MemorySearchResult[] = [];
+  const perMeeting = new Map<string, number>();
+
+  for (const candidate of sorted) {
+    const count = perMeeting.get(candidate.result.meeting_id) ?? 0;
+    if (count >= MAX_SOURCES_PER_MEETING) continue;
+
+    selected.push({
+      ...candidate.result,
+      score: candidate.score,
+    });
+
+    perMeeting.set(candidate.result.meeting_id, count + 1);
+
+    if (selected.length >= params.limit) return selected;
+  }
+
+  for (const candidate of sorted) {
+    if (selected.some((item) => resultKey(item) === candidate.key)) continue;
+
+    selected.push({
+      ...candidate.result,
+      score: candidate.score,
+    });
+
+    if (selected.length >= params.limit) break;
+  }
+
+  return selected;
+}
+
 function buildEvidenceBlock(results: MemorySearchResult[]): string {
   if (results.length === 0) return "No local meeting-memory evidence was retrieved.";
 
-  return results
-    .map((result, index) => {
-      const label = memorySourceLabel(index);
-      const title = result.meeting_title ?? result.meeting_id;
-      const time = secondsLabel(result.start_seconds, result.end_seconds);
+  const groups = new Map<string, MemorySearchResult[]>();
+
+  for (const result of results) {
+    const key = result.meeting_id;
+    groups.set(key, [...(groups.get(key) ?? []), result]);
+  }
+
+  return [...groups.entries()]
+    .map(([_meetingId, items]) => {
+      const first = items[0];
+      const meetingTitle = first.meeting_title ?? first.meeting_id;
+      const meetingDate = first.meeting_date ?? "no-date";
+      const projectTag = first.project_tag ?? "미분류";
+
+      const evidenceLines = items.map((result) => {
+        const index = results.indexOf(result);
+        const label = memorySourceLabel(index);
+        const time = secondsLabel(result.start_seconds, result.end_seconds);
+
+        return [
+          `[${label}]`,
+          `time: ${time}`,
+          `kind: ${result.memory_kind}`,
+          `similarity_score: ${result.score.toFixed(2)}`,
+          `content: ${safeSnippet(result.content)}`,
+        ].join("\n");
+      });
+
       return [
-        `[${label}]`,
-        `meeting: ${title}`,
-        `date: ${result.meeting_date ?? "no-date"}`,
-        `project: ${result.project_tag ?? "미분류"}`,
-        `time: ${time}`,
-        `kind: ${result.memory_kind}`,
-        `similarity_score: ${result.score.toFixed(2)}`,
-        `content: ${safeSnippet(result.content)}`,
+        `Meeting: ${meetingTitle}`,
+        `date: ${meetingDate}`,
+        `project: ${projectTag}`,
+        "",
+        evidenceLines.join("\n\n"),
       ].join("\n");
     })
-    .join("\n\n");
+    .join("\n\n---\n\n");
 }
 
-function extractOpenAIOutput(response: any): ExtractedOutput {
-  const outputText = typeof response.output_text === "string" ? response.output_text.trim() : "";
+function extractOpenAIOutput(response: unknown): ExtractedOutput {
+  const responseObj = isRecord(response) ? response : {};
+  const outputText =
+    typeof responseObj.output_text === "string" ? responseObj.output_text.trim() : "";
+
   const fallbackTexts: string[] = [];
   const webSources: AskSource[] = [];
   let webSearchUsed = false;
 
-  for (const item of response.output ?? []) {
-    if (item?.type === "web_search_call") webSearchUsed = true;
-    for (const content of item?.content ?? []) {
-      if (typeof content?.text === "string" && content.text.trim()) {
+  const output = Array.isArray(responseObj.output) ? responseObj.output : [];
+
+  for (const item of output) {
+    if (!isRecord(item)) continue;
+
+    if (item.type === "web_search_call") webSearchUsed = true;
+
+    const contentItems = Array.isArray(item.content) ? item.content : [];
+    for (const content of contentItems) {
+      if (!isRecord(content)) continue;
+
+      if (typeof content.text === "string" && content.text.trim()) {
         fallbackTexts.push(content.text.trim());
       }
-      for (const annotation of content?.annotations ?? []) {
-        if (annotation?.type !== "url_citation" || !annotation.url) continue;
+
+      const annotations = Array.isArray(content.annotations) ? content.annotations : [];
+      for (const annotation of annotations) {
+        if (!isRecord(annotation)) continue;
+
+        if (annotation.type !== "url_citation") continue;
+        if (typeof annotation.url !== "string" || !annotation.url) continue;
         if (webSources.some((existing) => existing.url === annotation.url)) continue;
+
         webSources.push({
           label: `웹 ${webSources.length + 1}`,
           type: "web",
-          title: annotation.title || annotation.url,
-          text: annotation.title || annotation.url,
+          title:
+            typeof annotation.title === "string" && annotation.title
+              ? annotation.title
+              : annotation.url,
+          text:
+            typeof annotation.title === "string" && annotation.title
+              ? annotation.title
+              : annotation.url,
           reason: "웹 검색 출처",
           url: annotation.url,
         });
@@ -186,7 +397,7 @@ function fallbackAnswer(params: {
   }
 
   lines.push("", "가장 관련 높은 회의 근거:");
-  for (const source of sources.slice(0, 3)) {
+  for (const source of sources.slice(0, 5)) {
     lines.push(`- ${source.label ?? "근거"}: ${source.reason}`);
     lines.push(`  ${source.text}`);
   }
@@ -196,12 +407,26 @@ function fallbackAnswer(params: {
 function buildDeveloperPrompt(mode: AskMode): string {
   if (mode === "rag") {
     return [
-      "You are a Korean lab meeting search chatbot.",
-      "Answer from local meeting-memory evidence only.",
-      "Do not use outside knowledge for meeting decisions.",
-      "If evidence is insufficient, say so.",
-      "Use concise Markdown.",
-      "When citing local meeting evidence, write labels like '(근거 1)' or '(근거 2)'; never use '[E1]' style labels.",
+      "You are a Korean lab meeting-memory RAG assistant.",
+      "Answer using local meeting-memory evidence only.",
+      "Do not use outside knowledge for private lab decisions, meeting discussions, or project history.",
+      "The retrieved evidence may come from multiple meetings. Synthesize across meetings when useful.",
+      "",
+      "Rules:",
+      "- Start with a direct answer.",
+      "- Then explain the evidence-based reasoning.",
+      "- Preserve speaker attribution when speaker names are present.",
+      "- Distinguish decisions, reasons, alternatives, and TODOs.",
+      "- If evidence is insufficient, say exactly what is missing.",
+      "- Do not invent unsupported intentions or decisions.",
+      "- Cite factual claims with labels like '(근거 1)' or '(근거 2)'.",
+      "- Never use '[E1]' style labels.",
+      "",
+      "Preferred format:",
+      "## 결론",
+      "## 근거 기반 정리",
+      "## 회의별 맥락",
+      "## 확인이 필요한 점",
     ].join("\n");
   }
 
@@ -209,7 +434,11 @@ function buildDeveloperPrompt(mode: AskMode): string {
     return [
       "You are a Korean web-search chatbot.",
       "Use the hosted web search tool for current or public information.",
+      "Use the recent chat history to resolve contextual references in the user's latest request.",
+      "When the user asks for papers, related work, prior work, or other literature, search for public scholarly or technical sources.",
+      "If the latest request contains expressions such as '위 내용', '이 주장', '그 문제', '아까 말한 것', or 'this point', infer the target from the recent chat history before searching.",
       "Do not claim to know private lab meeting decisions unless the user provides them in the conversation.",
+      "Clearly separate what comes from web sources from what is inferred from the conversation.",
       "Use concise Markdown and cite web sources when available.",
     ].join("\n");
   }
@@ -223,11 +452,73 @@ function buildDeveloperPrompt(mode: AskMode): string {
   ].join("\n");
 }
 
+async function rewriteRagQuery(params: {
+  apiKey: string;
+  model: string;
+  question: string;
+  history: AskHistoryMessage[];
+}): Promise<RagQueryRewrite> {
+  const openai = new OpenAI({ apiKey: params.apiKey });
+
+  const historyText =
+    params.history.length > 0
+      ? params.history.map((message) => `${message.role}: ${message.content}`).join("\n")
+      : "No prior chat history.";
+
+  const requestPayload = {
+    model: params.model,
+    max_output_tokens: QUERY_REWRITE_MAX_OUTPUT_TOKENS,
+    input: [
+      {
+        role: "developer",
+        content: [
+          "You rewrite Korean lab-memory questions into retrieval queries.",
+          "Your job is query rewriting only. Do not answer the question.",
+          "",
+          "Use the latest question and recent chat history.",
+          "Resolve pronouns, ellipses, and references such as '그거', '아까 말한 것', '그 교수님', '그 benchmark'.",
+          "Expand project names, paper names, benchmarks, method names, model names, and speaker names when inferable from history.",
+          "Produce lexical search queries suitable for BM25/keyword retrieval over meeting transcripts, notes, OCR, and summaries.",
+          "Do not invent facts not supported by the chat history.",
+          "If the reference is ambiguous, include multiple candidate search queries.",
+          "",
+          "Return strict JSON only with this schema:",
+          "{",
+          '  "standalone_question": string,',
+          '  "search_queries": string[],',
+          '  "entities": string[],',
+          '  "speaker_terms": string[],',
+          '  "time_hints": string[]',
+          "}",
+        ].join("\n"),
+      },
+      {
+        role: "user",
+        content: [
+          "Recent chat history:",
+          historyText,
+          "",
+          "Latest user question:",
+          params.question,
+        ].join("\n"),
+      },
+    ],
+  } as Parameters<typeof openai.responses.create>[0];
+
+  const response = await openai.responses.create(requestPayload);
+  const extracted = extractOpenAIOutput(response);
+  const parsed = safeJsonObject(extracted.text);
+
+  return normalizeRewrite(parsed, params.question);
+}
+
 async function callOpenAI(params: {
   apiKey: string;
   model: string;
   mode: AskMode;
   question: string;
+  rewrittenQuestion?: string;
+  retrievalQueries?: string[];
   localEvidence: string;
   history: AskHistoryMessage[];
   memoryError?: string;
@@ -236,17 +527,35 @@ async function callOpenAI(params: {
   const currentContent =
     params.mode === "rag"
       ? [
-          `Question:\n${params.question}`,
+          `Original user question:\n${params.question}`,
+          params.rewrittenQuestion
+            ? `Standalone rewritten question:\n${params.rewrittenQuestion}`
+            : "",
+          params.retrievalQueries?.length
+            ? `Retrieval queries used:\n${params.retrievalQueries
+                .map((query, index) => `${index + 1}. ${query}`)
+                .join("\n")}`
+            : "",
           `Local meeting-memory evidence:\n${params.localEvidence}`,
           params.memoryError ? `Memory DB warning:\n${params.memoryError}` : "",
         ]
           .filter(Boolean)
           .join("\n\n")
-      : params.question;
+      : params.mode === "web"
+        ? [
+            "Use the recent chat history to resolve references in the latest request before searching.",
+            "If the latest request contains expressions such as '위 내용', '이 주장', '그 문제', '아까 말한 것', 'that point', or 'this claim', infer the target from the recent chat history.",
+            "Search the web for public papers, technical reports, documentation, or credible posts that discuss the resolved topic.",
+            "Do not search only the literal latest request if it contains unresolved references.",
+            "When the user asks for literature, prioritize scholarly/technical sources and explain how each source relates to the resolved claim.",
+            "",
+            `Latest user request:\n${params.question}`,
+          ].join("\n\n")
+        : params.question;
 
-  const response = await openai.responses.create({
+  const requestPayload = {
     model: params.model,
-    max_output_tokens: 1000,
+    max_output_tokens: params.mode === "rag" ? 1600 : 1000,
     ...(params.mode === "web"
       ? {
           tools: [{ type: "web_search_preview", search_context_size: "low" }],
@@ -267,8 +576,9 @@ async function callOpenAI(params: {
         content: currentContent,
       },
     ],
-  } as any);
+  } as Parameters<typeof openai.responses.create>[0];
 
+  const response = await openai.responses.create(requestPayload);
   const extracted = extractOpenAIOutput(response);
   if (!extracted.text) throw new Error("OpenAI response did not include output text");
   return extracted;
@@ -414,26 +724,69 @@ export async function POST(request: Request) {
 
   const mode = normalizeMode(body);
   const history = sanitizeHistory(body.history);
-  const loaded = mode === "rag" ? await loadMemoryChunks() : { chunks: [], demoMode: false };
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  const model =
+    mode === "web"
+      ? process.env.OPENAI_WEB_SEARCH_MODEL || process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL
+      : process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
+
+  const rewriteModel =
+    process.env.OPENAI_QUERY_REWRITE_MODEL ||
+    process.env.OPENAI_REWRITE_MODEL ||
+    model;
+
+  const loaded: LoadedMemory =
+    mode === "rag"
+      ? await loadMemoryChunks()
+      : { chunks: [], demoMode: false };
+
+  let queryRewrite: RagQueryRewrite | null = null;
+
+  if (mode === "rag" && apiKey && loaded.chunks.length > 0) {
+    try {
+      queryRewrite = await rewriteRagQuery({
+        apiKey,
+        model: rewriteModel,
+        question,
+        history,
+      });
+    } catch (error) {
+      console.warn(
+        "[ask] query rewrite failed:",
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
+  const retrievalQueries =
+    mode === "rag"
+      ? uniqueStrings([
+          queryRewrite?.standalone_question ?? question,
+          ...(queryRewrite?.search_queries ?? []),
+          ...(queryRewrite?.entities ?? []),
+          ...(queryRewrite?.speaker_terms ?? []),
+          question,
+        ])
+      : [];
+
   const results =
     mode === "rag"
-      ? rankMemoryChunks(question, loaded.chunks, {
+      ? rankWithRewrittenQueries({
+          queries: retrievalQueries.length ? retrievalQueries : [question],
+          chunks: loaded.chunks,
           limit: MAX_LOCAL_SOURCES,
-          sortBySimilarity: true,
         })
       : [];
+
   const localSources = toAskSources(results);
+
   const chat = await ensureChatStorage({
     requestedChatId: body.chatId,
     question,
     mode,
     history,
   });
-  const apiKey = process.env.OPENAI_API_KEY;
-  const model =
-    mode === "web"
-      ? process.env.OPENAI_WEB_SEARCH_MODEL || process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL
-      : process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
 
   if (!apiKey) {
     const payload: AskResponse = {
@@ -456,7 +809,13 @@ export async function POST(request: Request) {
       chat_id: chat.chatId,
       user_message_id: chat.userMessageId,
     };
-    return responseWithStoredAssistant(payload, 200, chat, mode, { needs_api_key: true, storage_error: chat.storageError });
+
+    return responseWithStoredAssistant(payload, 200, chat, mode, {
+      needs_api_key: true,
+      storage_error: chat.storageError,
+      retrieval_queries: retrievalQueries,
+      query_rewrite: queryRewrite,
+    });
   }
 
   try {
@@ -465,6 +824,8 @@ export async function POST(request: Request) {
       model,
       mode,
       question,
+      rewrittenQuestion: queryRewrite?.standalone_question,
+      retrievalQueries,
       localEvidence: buildEvidenceBlock(results),
       history,
       memoryError: loaded.memoryError,
@@ -483,7 +844,13 @@ export async function POST(request: Request) {
       chat_id: chat.chatId,
       user_message_id: chat.userMessageId,
     };
-    return responseWithStoredAssistant(payload, 200, chat, mode, { storage_error: chat.storageError });
+
+    return responseWithStoredAssistant(payload, 200, chat, mode, {
+      storage_error: chat.storageError,
+      retrieval_queries: retrievalQueries,
+      query_rewrite: queryRewrite,
+      rewrite_model: mode === "rag" ? rewriteModel : undefined,
+    });
   } catch (error) {
     const payload: AskResponse = {
       answer: fallbackAnswer({
@@ -504,15 +871,23 @@ export async function POST(request: Request) {
       chat_id: chat.chatId,
       user_message_id: chat.userMessageId,
     };
+
     return responseWithStoredAssistant(
       {
         ...payload,
-        answer: `${payload.answer}\n\n_${error instanceof Error ? error.message : "OpenAI request failed"}_`,
+        answer: `${payload.answer}\n\n_${
+          error instanceof Error ? error.message : "OpenAI request failed"
+        }_`,
       },
       502,
       chat,
       mode,
-      { storage_error: chat.storageError }
+      {
+        storage_error: chat.storageError,
+        retrieval_queries: retrievalQueries,
+        query_rewrite: queryRewrite,
+        rewrite_model: mode === "rag" ? rewriteModel : undefined,
+      }
     );
   }
 }

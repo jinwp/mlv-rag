@@ -55,12 +55,12 @@ export async function POST(req: Request) {
       "",
       "Rendering constraints:",
       "- Create a clean academic figure.",
-      "- Use the background specified in the figure prompt. If no background is specified, use a white background.",
+      "- White background.",
       "- 2D diagram style.",
       "- Clear boxes, arrows, and labels.",
       "- Minimal color palette.",
       "- No photorealistic scene.",
-      "- No decorative background unless explicitly requested by the figure prompt.",
+      "- No decorative background.",
       "- No people, no hands, no whiteboard frame.",
       "- Avoid tiny unreadable text.",
     ].join("\n");
@@ -102,7 +102,9 @@ export async function POST(req: Request) {
         upsert: true,
       });
 
-    if (uploadError) throw uploadError;
+    if (uploadError) {
+      throw uploadError;
+    }
 
     const now = new Date().toISOString();
     const provider = `openai:${model}`;
@@ -117,7 +119,9 @@ export async function POST(req: Request) {
       })
       .eq("id", photoId);
 
-    if (updateError) throw updateError;
+    if (updateError) {
+      throw updateError;
+    }
 
     return NextResponse.json({
       provider,

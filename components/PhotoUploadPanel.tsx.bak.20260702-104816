@@ -383,98 +383,6 @@ export function PhotoUploadPanel({
     }
   }
 
-  async function regenerateFigurePrompt(photo: Photo) {
-    const draft = ensureDraft(photo);
-
-    if (draft.mode !== "diagram") {
-      setError("Figure prompt regeneration is only available in Diagram mode.");
-      return;
-    }
-
-    if (!draft.feedback.trim()) {
-      setError("Correction note is empty. Write what should change first.");
-      return;
-    }
-
-    if (!draft.figure_prompt.trim() && !draft.diagram_summary.trim()) {
-      setError(
-        "Figure prompt and diagram summary are both empty. Run Diagram analysis first or write a prompt."
-      );
-      return;
-    }
-
-    setBusyPhotoId(photo.id);
-    setError(null);
-
-    try {
-      const res = await fetch("/api/regenerate-figure-prompt", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          photoId: photo.id,
-          currentFigurePrompt: draft.figure_prompt,
-          correctionNote: draft.feedback,
-          diagramSummary: draft.diagram_summary,
-          extractedText: draft.text,
-          extractedLatex: draft.latex,
-          meeting: {
-            title: meeting.title,
-            date: meeting.date,
-            project_tag: meeting.project_tag,
-            agenda: meeting.agenda,
-            participants: meeting.participants,
-          },
-          notes: notes.map((n) => ({
-            elapsed_seconds: n.elapsed_seconds,
-            content: n.content,
-          })),
-          transcriptContext,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(
-          data.detail ?? data.error ?? "Figure prompt regeneration failed"
-        );
-      }
-
-      const nextPrompt =
-        typeof data.figure_prompt === "string"
-          ? data.figure_prompt.trim()
-          : "";
-
-      if (!nextPrompt) {
-        throw new Error("Figure prompt regeneration returned an empty prompt");
-      }
-
-      updateDraft(photo.id, {
-        figure_prompt: nextPrompt,
-      });
-
-      setPhotos((prev) =>
-        prev.map((p) =>
-          p.id === photo.id
-            ? {
-                ...p,
-                analysis_status: "draft",
-                figure_prompt: nextPrompt,
-                analysis_feedback: draft.feedback,
-              }
-            : p
-        )
-      );
-    } catch (err: any) {
-      console.error("[PhotoUploadPanel] prompt regeneration failed", err);
-      setError(err?.message ?? "Figure prompt regeneration failed");
-    } finally {
-      setBusyPhotoId(null);
-    }
-  }
-
   async function generateFigure(photo: Photo) {
     const draft = ensureDraft(photo);
 
@@ -946,15 +854,10 @@ export function PhotoUploadPanel({
                     <button
                       type="button"
                       style={button}
-                      disabled={busy || draft.mode !== "diagram"}
-                      onClick={() => regenerateFigurePrompt(p)}
-                      title={
-                        draft.mode !== "diagram"
-                          ? "Figure prompt regeneration is only available in Diagram mode."
-                          : "Rewrite the Figure prompt using the correction note."
-                      }
+                      disabled={busy}
+                      onClick={() => analyzePhoto(p, true)}
                     >
-                      {busy ? "Regenerating prompt..." : "Regenerate prompt"}
+                      Regenerate with feedback
                     </button>
 
                     <button
