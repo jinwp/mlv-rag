@@ -25,12 +25,7 @@ export default function NewMeetingPage() {
   const [date, setDate] = useState(today);
   const [project, setProject] = useState("");
   const [agenda, setAgenda] = useState("");
-  const [participants, setParticipants] = useState<string[]>([
-    "박진웅",
-    "윤성",
-    "규진",
-    "지도교수님",
-  ]);
+  const [participants, setParticipants] = useState<string[]>([]);
   const [partDraft, setPartDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
