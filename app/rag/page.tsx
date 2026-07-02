@@ -298,7 +298,7 @@ export default function RagPage() {
   const [showChunks, setShowChunks] = useState(false);
   const [indexState, setIndexState] = useState<LoadState>("idle");
   const [indexMessage, setIndexMessage] = useState("");
-  const [question, setQuestion] = useState("왜 GSM8K 우선순위를 낮췄지?");
+  const [question, setQuestion] = useState("Ask a question about this meeting");
   const [limit, setLimit] = useState(16);
   const [projectOnly, setProjectOnly] = useState(false);
   const [searchSortBySimilarity, setSearchSortBySimilarity] = useState(true);
