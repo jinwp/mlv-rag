@@ -152,7 +152,7 @@ export default function AskPage() {
   const [mode, setMode] = useState<AskMode>("rag");
   const [chatId, setChatId] = useState<string | null>(null);
   const [recentChats, setRecentChats] = useState<ChatSessionRow[]>([]);
-  const [recentChatsOpen, setRecentChatsOpen] = useState(true);
+  const [recentChatsOpen, setRecentChatsOpen] = useState(false);
   const [recentLoading, setRecentLoading] = useState(false);
   const [recentError, setRecentError] = useState("");
   const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
@@ -431,171 +431,259 @@ export default function AskPage() {
   );
 
   const recentChatList = (
-    <div style={{ marginTop: 22, textAlign: "left" }}>
-      <div
+    <>
+      <button
+        type="button"
+        onClick={() => setRecentChatsOpen(true)}
+        className="mono"
         style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 10,
-          marginBottom: 10,
+          position: "fixed",
+          right: 24,
+          top: 72,
+          zIndex: 30,
+          border: "1px solid #d8dee7",
+          background: "#fff",
+          color: "#3550c7",
+          borderRadius: 999,
+          padding: "9px 13px",
+          fontSize: 11.5,
+          fontWeight: 800,
+          cursor: "pointer",
+          boxShadow: "0 6px 18px rgba(20,30,50,.10)",
         }}
       >
-        <div
-          className="mono"
-          style={{ fontSize: 11, color: "#aab2c0", letterSpacing: ".03em" }}
-        >
-          RECENT CHATS
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-          <button
-            type="button"
-            onClick={() => void loadRecentChats()}
-            className="mono"
-            style={{
-              border: "none",
-              background: "transparent",
-              color: "#3550c7",
-              fontSize: 11,
-              fontWeight: 700,
-              cursor: "pointer",
-              padding: 0,
-            }}
-          >
-            refresh
-          </button>
-          <button
-            type="button"
-            onClick={() => setRecentChatsOpen((current) => !current)}
-            className="mono"
-            style={{
-              border: "none",
-              background: "transparent",
-              color: "#64748b",
-              fontSize: 11,
-              fontWeight: 700,
-              cursor: "pointer",
-              padding: 0,
-            }}
-          >
-            {recentChatsOpen ? "hide" : "show"}
-          </button>
-        </div>
-      </div>
+        Recent chats
+        {recentChats.length ? ` · ${recentChats.length}` : ""}
+      </button>
 
       {recentChatsOpen && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {recentError && (
-            <div
-              style={{
-                border: "1px solid #fed7aa",
-                background: "#fff7ed",
-                color: "#9a3412",
-                borderRadius: 10,
-                padding: "11px 13px",
-                fontSize: 13,
-                lineHeight: 1.45,
-              }}
-            >
-              {recentError}
-            </div>
-          )}
+        <>
+          <button
+            type="button"
+            aria-label="Close recent chats"
+            onClick={() => setRecentChatsOpen(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 39,
+              border: "none",
+              background: "rgba(15,23,42,.18)",
+              cursor: "default",
+            }}
+          />
 
-          {recentLoading ? (
-            <div className="mono" style={{ padding: 14, color: "#9aa3b2", fontSize: 12 }}>
-              loading recent chats...
-            </div>
-          ) : recentChats.length === 0 ? (
+          <aside
+            style={{
+              position: "fixed",
+              top: 0,
+              right: 0,
+              bottom: 0,
+              width: "min(420px, calc(100vw - 36px))",
+              zIndex: 40,
+              background: "#fff",
+              borderLeft: "1px solid #e4e8ef",
+              boxShadow: "-12px 0 28px rgba(15,23,42,.16)",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
             <div
               style={{
-                border: "1px dashed #d5dce6",
-                borderRadius: 10,
-                padding: "14px 15px",
-                color: "#94a3b8",
-                fontSize: 13,
-                textAlign: "center",
+                flex: "none",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                padding: "18px 18px 14px",
+                borderBottom: "1px solid #eceff4",
+                background: "#fafbfd",
               }}
             >
-              저장된 채팅이 없습니다. 새 질문을 보내면 여기에 표시됩니다.
-            </div>
-          ) : (
-            recentChats.map((session) => {
-              const active = chatId === session.id;
-              return (
-                <button
-                  key={session.id}
-                  type="button"
-                  onClick={() => loadChatSession(session)}
-                  disabled={loadingSessionId === session.id}
+              <div>
+                <div
+                  className="mono"
                   style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr auto",
-                    gap: 12,
-                    alignItems: "center",
-                    textAlign: "left",
-                    border: `1px solid ${active ? "#c8d2f5" : "#e4e8ef"}`,
-                    background: active ? "#f5f7ff" : "#fff",
-                    borderRadius: 10,
-                    padding: "12px 15px",
-                    cursor: loadingSessionId === session.id ? "default" : "pointer",
-                    opacity: loadingSessionId === session.id ? 0.65 : 1,
+                    fontSize: 11,
+                    color: "#aab2c0",
+                    letterSpacing: ".05em",
+                    marginBottom: 4,
                   }}
                 >
-                  <span style={{ minWidth: 0 }}>
-                    <span
-                      style={{
-                        display: "block",
-                        color: "#1f2937",
-                        fontSize: 14,
-                        fontWeight: 700,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        marginBottom: 4,
-                      }}
-                    >
-                      {session.title || "Untitled chat"}
-                    </span>
-                    <span
-                      className="mono"
-                      style={{
-                        display: "block",
-                        color: "#94a3b8",
-                        fontSize: 11,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      chat_{shortId(session.id)} · {formatDate(session.updated_at ?? session.created_at)}
-                    </span>
-                  </span>
-                  <span
-                    className="mono"
-                    style={{
-                      flex: "none",
-                      border: "1px solid #dde3f7",
-                      background: "#eef1fc",
-                      color: "#3550c7",
-                      borderRadius: 6,
-                      padding: "3px 7px",
-                      fontSize: 10.5,
-                      fontWeight: 700,
-                    }}
-                  >
-                    {loadingSessionId === session.id ? "loading" : modeLabel(session.mode)}
-                  </span>
+                  RECENT CHATS
+                </div>
+                <div style={{ fontSize: 17, fontWeight: 800, color: "#1b2231" }}>
+                  저장된 채팅
+                </div>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => void loadRecentChats()}
+                  className="mono"
+                  style={{
+                    border: "1px solid #d8dee7",
+                    background: "#fff",
+                    color: "#3550c7",
+                    borderRadius: 8,
+                    padding: "6px 9px",
+                    fontSize: 11,
+                    fontWeight: 800,
+                    cursor: "pointer",
+                  }}
+                >
+                  refresh
                 </button>
-              );
-            })
-          )}
-        </div>
+                <button
+                  type="button"
+                  onClick={() => setRecentChatsOpen(false)}
+                  aria-label="Close recent chats"
+                  style={{
+                    border: "1px solid #d8dee7",
+                    background: "#fff",
+                    color: "#64748b",
+                    borderRadius: 8,
+                    width: 30,
+                    height: 30,
+                    fontSize: 18,
+                    lineHeight: 1,
+                    cursor: "pointer",
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflowY: "auto",
+                padding: 14,
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+              }}
+            >
+              {recentError && (
+                <div
+                  style={{
+                    border: "1px solid #fed7aa",
+                    background: "#fff7ed",
+                    color: "#9a3412",
+                    borderRadius: 10,
+                    padding: "11px 13px",
+                    fontSize: 13,
+                    lineHeight: 1.45,
+                  }}
+                >
+                  {recentError}
+                </div>
+              )}
+
+              {recentLoading ? (
+                <div className="mono" style={{ padding: 14, color: "#9aa3b2", fontSize: 12 }}>
+                  loading recent chats...
+                </div>
+              ) : recentChats.length === 0 ? (
+                <div
+                  style={{
+                    border: "1px dashed #d5dce6",
+                    borderRadius: 10,
+                    padding: "18px 15px",
+                    color: "#94a3b8",
+                    fontSize: 13,
+                    textAlign: "center",
+                    lineHeight: 1.55,
+                  }}
+                >
+                  저장된 채팅이 없습니다. 새 질문을 보내면 여기에 표시됩니다.
+                </div>
+              ) : (
+                recentChats.map((session) => {
+                  const active = chatId === session.id;
+                  return (
+                    <button
+                      key={session.id}
+                      type="button"
+                      onClick={async () => {
+                        await loadChatSession(session);
+                        setRecentChatsOpen(false);
+                      }}
+                      disabled={loadingSessionId === session.id}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "1fr auto",
+                        gap: 12,
+                        alignItems: "center",
+                        textAlign: "left",
+                        border: `1px solid ${active ? "#c8d2f5" : "#e4e8ef"}`,
+                        background: active ? "#f5f7ff" : "#fff",
+                        borderRadius: 10,
+                        padding: "12px 14px",
+                        cursor: loadingSessionId === session.id ? "default" : "pointer",
+                        opacity: loadingSessionId === session.id ? 0.65 : 1,
+                      }}
+                    >
+                      <span style={{ minWidth: 0 }}>
+                        <span
+                          style={{
+                            display: "block",
+                            color: "#1f2937",
+                            fontSize: 14,
+                            fontWeight: 700,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            marginBottom: 4,
+                          }}
+                        >
+                          {session.title || "Untitled chat"}
+                        </span>
+                        <span
+                          className="mono"
+                          style={{
+                            display: "block",
+                            color: "#94a3b8",
+                            fontSize: 11,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          chat_{shortId(session.id)} · {formatDate(session.updated_at ?? session.created_at)}
+                        </span>
+                      </span>
+                      <span
+                        className="mono"
+                        style={{
+                          flex: "none",
+                          border: "1px solid #dde3f7",
+                          background: "#eef1fc",
+                          color: "#3550c7",
+                          borderRadius: 6,
+                          padding: "3px 7px",
+                          fontSize: 10.5,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {loadingSessionId === session.id ? "loading" : modeLabel(session.mode)}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </aside>
+        </>
       )}
-    </div>
+    </>
   );
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {recentChatList}
       {!hasMessages ? (
         <div
           style={{
@@ -633,7 +721,6 @@ export default function AskPage() {
             </p>
 
             {composer("hero")}
-            {recentChatList}
           </div>
         </div>
       ) : (
