@@ -156,6 +156,7 @@ export default function AskPage() {
   const [recentLoading, setRecentLoading] = useState(false);
   const [recentError, setRecentError] = useState("");
   const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const chatRef = useRef<HTMLDivElement>(null);
 
   const hasMessages = messages.length > 0;
@@ -239,6 +240,47 @@ export default function AskPage() {
       setRecentError(message);
     } finally {
       setLoadingSessionId(null);
+    }
+  }
+
+  async function deleteChatSession(session: ChatSessionRow) {
+    if (!isSupabaseConfigured) return;
+
+    const title = session.title || `chat_${shortId(session.id)}`;
+    const ok = window.confirm(`이 채팅을 삭제할까요?\n\n${title}`);
+    if (!ok) return;
+
+    setDeletingSessionId(session.id);
+    setRecentError("");
+
+    try {
+      const { error: messageDeleteError } = await supabase
+        .from("chat_messages")
+        .delete()
+        .eq("chat_id", session.id);
+
+      if (messageDeleteError) throw messageDeleteError;
+
+      const { error: sessionDeleteError } = await supabase
+        .from("chat_sessions")
+        .delete()
+        .eq("id", session.id);
+
+      if (sessionDeleteError) throw sessionDeleteError;
+
+      setRecentChats((prev) => prev.filter((item) => item.id !== session.id));
+
+      if (chatId === session.id) {
+        setMessages([]);
+        setDraft("");
+        setChatId(null);
+        setMode("rag");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to delete chat.";
+      setRecentError(message);
+    } finally {
+      setDeletingSessionId(null);
     }
   }
 
@@ -603,30 +645,40 @@ export default function AskPage() {
               ) : (
                 recentChats.map((session) => {
                   const active = chatId === session.id;
+                  const loading = loadingSessionId === session.id;
+                  const deleting = deletingSessionId === session.id;
+
                   return (
-                    <button
+                    <div
                       key={session.id}
-                      type="button"
-                      onClick={async () => {
-                        await loadChatSession(session);
-                        setRecentChatsOpen(false);
-                      }}
-                      disabled={loadingSessionId === session.id}
                       style={{
                         display: "grid",
                         gridTemplateColumns: "1fr auto",
-                        gap: 12,
+                        gap: 10,
                         alignItems: "center",
-                        textAlign: "left",
                         border: `1px solid ${active ? "#c8d2f5" : "#e4e8ef"}`,
                         background: active ? "#f5f7ff" : "#fff",
                         borderRadius: 10,
-                        padding: "12px 14px",
-                        cursor: loadingSessionId === session.id ? "default" : "pointer",
-                        opacity: loadingSessionId === session.id ? 0.65 : 1,
+                        padding: "10px 12px",
+                        opacity: loading || deleting ? 0.65 : 1,
                       }}
                     >
-                      <span style={{ minWidth: 0 }}>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await loadChatSession(session);
+                          setRecentChatsOpen(false);
+                        }}
+                        disabled={loading || deleting}
+                        style={{
+                          minWidth: 0,
+                          border: "none",
+                          background: "transparent",
+                          padding: 0,
+                          cursor: loading || deleting ? "default" : "pointer",
+                          textAlign: "left",
+                        }}
+                      >
                         <span
                           style={{
                             display: "block",
@@ -654,23 +706,53 @@ export default function AskPage() {
                         >
                           chat_{shortId(session.id)} · {formatDate(session.updated_at ?? session.created_at)}
                         </span>
-                      </span>
-                      <span
-                        className="mono"
+                      </button>
+
+                      <div
                         style={{
-                          flex: "none",
-                          border: "1px solid #dde3f7",
-                          background: "#eef1fc",
-                          color: "#3550c7",
-                          borderRadius: 6,
-                          padding: "3px 7px",
-                          fontSize: 10.5,
-                          fontWeight: 700,
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "flex-end",
+                          gap: 6,
                         }}
                       >
-                        {loadingSessionId === session.id ? "loading" : modeLabel(session.mode)}
-                      </span>
-                    </button>
+                        <span
+                          className="mono"
+                          style={{
+                            flex: "none",
+                            border: "1px solid #dde3f7",
+                            background: "#eef1fc",
+                            color: "#3550c7",
+                            borderRadius: 6,
+                            padding: "3px 7px",
+                            fontSize: 10.5,
+                            fontWeight: 700,
+                          }}
+                        >
+                          {loading ? "loading" : deleting ? "deleting" : modeLabel(session.mode)}
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={() => deleteChatSession(session)}
+                          disabled={loading || deleting}
+                          className="mono"
+                          title="Delete chat"
+                          style={{
+                            border: "1px solid #fecaca",
+                            background: "#fff7f7",
+                            color: "#991b1b",
+                            borderRadius: 6,
+                            padding: "3px 7px",
+                            fontSize: 10.5,
+                            fontWeight: 700,
+                            cursor: loading || deleting ? "default" : "pointer",
+                          }}
+                        >
+                          delete
+                        </button>
+                      </div>
+                    </div>
                   );
                 })
               )}
