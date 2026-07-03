@@ -54,7 +54,10 @@ async function getAllAudioPaths() {
 
   return (data ?? [])
     .map((row: any) => row.audio_path)
-    .filter((path: unknown): path is string => typeof path === "string" && path.trim())
+    .filter(
+      (path: unknown): path is string =>
+        typeof path === "string" && path.trim().length > 0
+    )    
     .map((path) => path.trim());
 }
 
