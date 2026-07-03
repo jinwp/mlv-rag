@@ -5,14 +5,15 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
-type NavKey = "new" | "list" | "ask" | "rag" | "fast_ocr";
+type NavKey = "new" | "list" | "ask" | "rag" | "fast_ocr" | "storage";
 
 const NAV: { key: NavKey; label: string; sub: string; href: string }[] = [
+  { key: "ask", label: "검색", sub: "/ask", href: "/ask" },
   { key: "new", label: "새 회의", sub: "/meetings/new", href: "/meetings/new" },
   { key: "list", label: "회의 목록", sub: "/meetings", href: "/meetings" },
-  { key: "ask", label: "검색 · 챗봇", sub: "/ask", href: "/ask" },
-  { key: "rag", label: "RAG 실험", sub: "/rag", href: "/rag" },
+  { key: "rag", label: "회의 분석", sub: "/rag", href: "/rag" },
   { key: "fast_ocr", label: "Fast OCR", sub: "/fast_ocr", href: "/fast_ocr" },
+  { key: "storage", label: "Storage", sub: "/storage", href: "/storage" },
 ];
 
 function groupFor(pathname: string): NavKey {
@@ -24,6 +25,7 @@ function groupFor(pathname: string): NavKey {
     return "list";
   }
   if (pathname.startsWith("/fast_ocr")) return "fast_ocr";
+  if (pathname.startsWith("/storage")) return "storage";
   return "ask";
 }
 
