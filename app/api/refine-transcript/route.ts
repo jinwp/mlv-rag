@@ -5,10 +5,12 @@ import {
   formatNotionContextsForPrompt,
   loadSelectedNotionPageContexts,
 } from "@/lib/notion/context";
+import { syncNotionSlideChunksForMeeting } from "@/lib/memory/notionSlideChunks";
 
 export const runtime = "nodejs";
 
 type MeetingContext = {
+  id?: string;
   title?: string;
   date?: string;
   project_tag?: string | null;
@@ -125,19 +127,27 @@ function buildNotionContextInstruction(hasContext: boolean) {
 }
 
 function buildRefinementContextPayload(args: {
-  contextSummary: string;
   notionSlidePageIds: string[];
   notionSlidePathMap: NotionSlidePathMap;
   notionContextCount: number;
+  speakerMapProvided: boolean;
+  notesCount: number;
+  slideChunkSync: {
+    deletedExisting: boolean;
+    insertedChunks: number;
+    sourceCount: number;
+  };
 }) {
   return {
-    context_summary: args.contextSummary,
+    context_policy: "read_from_notion_at_rewrite_time",
+    speaker_map_provided: args.speakerMapProvided,
+    notes_count: args.notesCount,
+    notion_context_count: args.notionContextCount,
+    notion_slide_chunk_sync: args.slideChunkSync,
     notion_slides: args.notionSlidePageIds.map((pageId) => ({
       pageId,
       path: args.notionSlidePathMap[pageId] ?? null,
     })),
-    notion_context_count: args.notionContextCount,
-    context_policy: "read_from_notion_at_rewrite_time",
   };
 }
 
@@ -146,7 +156,8 @@ export async function POST(req: Request) {
     const body = await req.json();
 
     const {
-      rawText,
+      meetingId: rawMeetingId,
+      rawText: rawRawText,
       meeting,
       notes,
       speakerMapText,
@@ -154,19 +165,8 @@ export async function POST(req: Request) {
       notionSlidePathMap: rawNotionSlidePathMap,
     } = body;
 
-    if (!rawText || typeof rawText !== "string") {
-      return NextResponse.json(
-        { error: "rawText is required" },
-        { status: 400 }
-      );
-    }
-
-    if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json(
-        { error: "OPENAI_API_KEY is missing" },
-        { status: 500 }
-      );
-    }
+    const rawText = typeof rawRawText === "string" ? rawRawText : "";
+    const hasRawText = rawText.trim().length > 0;
 
     const notionSlidePageIds = normalizeNotionSlidePageIds(
       rawNotionSlidePageIds
@@ -174,6 +174,28 @@ export async function POST(req: Request) {
     const notionSlidePathMap = normalizeNotionSlidePathMap(
       rawNotionSlidePathMap
     );
+
+    const meetingObj = (meeting ?? {}) as MeetingContext;
+    const meetingId =
+      typeof rawMeetingId === "string" && rawMeetingId.trim().length > 0
+        ? rawMeetingId.trim()
+        : typeof meetingObj.id === "string"
+        ? meetingObj.id
+        : "";
+
+    if (!hasRawText && notionSlidePageIds.length === 0) {
+      return NextResponse.json(
+        { error: "Either rawText or notionSlidePageIds is required" },
+        { status: 400 }
+      );
+    }
+
+    if (!meetingId && notionSlidePageIds.length > 0) {
+      return NextResponse.json(
+        { error: "meetingId is required to sync Notion slide chunks" },
+        { status: 400 }
+      );
+    }
 
     const notionContexts =
       notionSlidePageIds.length > 0
@@ -184,6 +206,18 @@ export async function POST(req: Request) {
           })
         : [];
 
+    const slideChunkSync =
+      meetingId.length > 0
+        ? await syncNotionSlideChunksForMeeting({
+            meetingId,
+            contexts: notionContexts,
+          })
+        : {
+            deletedExisting: false,
+            insertedChunks: 0,
+            sourceCount: 0,
+          };
+
     const notionContextInstruction = buildNotionContextInstruction(
       notionContexts.length > 0
     );
@@ -191,11 +225,16 @@ export async function POST(req: Request) {
     const notionSlideContextText =
       formatNotionContextsForPrompt(notionContexts);
 
-    const meetingContext = buildMeetingContext(meeting ?? {});
-    const notesContext = buildNotesContext((notes ?? []) as NoteContext[]);
-    const speakerMappingContext = buildSpeakerMappingContext(
-      typeof speakerMapText === "string" ? speakerMapText : ""
-    );
+    const noteContexts = Array.isArray(notes)
+      ? ((notes ?? []) as NoteContext[])
+      : [];
+
+    const speakerMap =
+      typeof speakerMapText === "string" ? speakerMapText : "";
+
+    const meetingContext = buildMeetingContext(meetingObj);
+    const notesContext = buildNotesContext(noteContexts);
+    const speakerMappingContext = buildSpeakerMappingContext(speakerMap);
 
     const contextSummary = [
       "Meeting metadata:",
@@ -212,7 +251,36 @@ export async function POST(req: Request) {
             .map((context) => context.path)
             .join(" | ")}`
         : "Selected Notion slide contexts: None",
+      "",
+      `Notion slide chunks synced: ${slideChunkSync.insertedChunks}`,
     ].join("\n");
+
+    const refinementContext = buildRefinementContextPayload({
+      notionSlidePageIds,
+      notionSlidePathMap,
+      notionContextCount: notionContexts.length,
+      speakerMapProvided: speakerMap.trim().length > 0,
+      notesCount: noteContexts.length,
+      slideChunkSync,
+    });
+
+    if (!hasRawText) {
+      return NextResponse.json({
+        mode: "chunk_only",
+        provider: null,
+        refinedText: null,
+        contextSummary,
+        refinementContext,
+        slideChunkSync,
+      });
+    }
+
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        { error: "OPENAI_API_KEY is missing" },
+        { status: 500 }
+      );
+    }
 
     const userPrompt = [
       notionContextInstruction,
@@ -282,15 +350,12 @@ export async function POST(req: Request) {
       completion.choices[0]?.message?.content?.trim() ?? rawText;
 
     return NextResponse.json({
+      mode: "rewrite",
       provider: `openai:${model}`,
       refinedText,
       contextSummary,
-      refinementContext: buildRefinementContextPayload({
-        contextSummary,
-        notionSlidePageIds,
-        notionSlidePathMap,
-        notionContextCount: notionContexts.length,
-      }),
+      refinementContext,
+      slideChunkSync,
     });
   } catch (err: any) {
     console.error("[refine-transcript] failed", err);

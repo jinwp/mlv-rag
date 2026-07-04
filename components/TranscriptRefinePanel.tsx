@@ -42,7 +42,7 @@ const primaryButton: React.CSSProperties = {
   ...button,
   background: "#111827",
   color: "#fff",
-  borderColor: "#111827",
+  border: "1px solid #111827",
 };
 
 const pre: React.CSSProperties = {
@@ -73,7 +73,7 @@ const rawSummary: React.CSSProperties = {
 const refinedScrollBox: React.CSSProperties = {
   ...pre,
   background: "#f0fdf4",
-  borderColor: "#bbf7d0",
+  border: "1px solid #bbf7d0",
   maxHeight: 640,
   overflow: "auto",
 };
@@ -153,20 +153,24 @@ export function TranscriptRefinePanel({
   const [items, setItems] = useState<Transcript[]>(transcripts);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [speakerMaps, setSpeakerMaps] = useState<Record<string, string>>({});
 
   async function refineTranscript(t: Transcript) {
     const rawText = typeof t.full_text === "string" ? t.full_text : "";
+    const hasRawText = rawText.trim().length > 0;
+    const hasSlideContext = selectedNotionSlides.length > 0;
 
-    if (!rawText.trim()) {
+    if (!hasRawText && !hasSlideContext) {
       setError(
-        "이 transcript에는 full_text가 없습니다. 먼저 전사를 생성하거나 full_text가 있는 transcript를 선택해야 합니다."
+        "전사 텍스트가 없고 선택된 slide context도 없습니다. 먼저 전사를 생성하거나 slide context를 선택하세요."
       );
       return;
     }
 
     setBusyId(t.id);
     setError(null);
+    setStatus(null);
 
     const speakerMapText = speakerMaps[t.id] ?? "";
     const refinedAt = new Date().toISOString();
@@ -186,9 +190,11 @@ export function TranscriptRefinePanel({
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          meetingId: meeting.id,
           rawText,
           speakerMapText,
           meeting: {
+            id: meeting.id,
             title: meeting.title,
             date: meeting.date,
             project_tag: meeting.project_tag,
@@ -208,6 +214,16 @@ export function TranscriptRefinePanel({
 
       if (!res.ok) {
         throw new Error(data.detail ?? data.error ?? "Refinement failed");
+      }
+
+      if (data.mode === "chunk_only") {
+        const insertedChunks =
+          data.slideChunkSync?.insertedChunks ?? "unknown";
+
+        setStatus(
+          `Slide context synced to meeting RAG chunks. Inserted chunks: ${insertedChunks}.`
+        );
+        return;
       }
 
       const refinedText = data.refinedText as string;
@@ -242,6 +258,14 @@ export function TranscriptRefinePanel({
             : item
         )
       );
+
+      const insertedChunks = data.slideChunkSync?.insertedChunks ?? 0;
+
+      setStatus(
+        insertedChunks > 0
+          ? `Transcript rewritten. Slide chunks synced: ${insertedChunks}.`
+          : "Transcript rewritten."
+      );
     } catch (err: any) {
       console.error("[TranscriptRefinePanel] failed", err);
       setError(err?.message ?? "Transcript refinement failed");
@@ -256,7 +280,8 @@ export function TranscriptRefinePanel({
         <div>
           <div style={{ fontWeight: 800 }}>전사 (STT)</div>
           <div style={{ color: "#64748b", fontSize: 12 }}>
-            raw transcript → speaker-aware notes/slide-context rewrite
+            raw transcript → speaker-aware notes/slide-context rewrite + RAG
+            sync
           </div>
         </div>
       </div>
@@ -277,11 +302,27 @@ export function TranscriptRefinePanel({
           </div>
         )}
 
+        {status && (
+          <div
+            style={{
+              padding: 12,
+              borderRadius: 10,
+              background: "#f0fdf4",
+              color: "#166534",
+              border: "1px solid #bbf7d0",
+              fontSize: 13,
+            }}
+          >
+            {status}
+          </div>
+        )}
+
         {selectedNotionSlides.length > 0 && (
           <div style={contextNotice}>
             Using {selectedNotionSlides.length} selected Notion slide context
             page{selectedNotionSlides.length > 1 ? "s" : ""}. The server reads
-            them directly from Notion at rewrite time.
+            them directly from Notion at execution time and syncs them into
+            meeting RAG chunks.
           </div>
         )}
 
@@ -292,6 +333,9 @@ export function TranscriptRefinePanel({
             const hasRawText =
               typeof t.full_text === "string" &&
               t.full_text.trim().length > 0;
+
+            const hasSlideContext = selectedNotionSlides.length > 0;
+            const canRun = hasRawText || hasSlideContext;
 
             return (
               <div
@@ -316,29 +360,33 @@ export function TranscriptRefinePanel({
                     <div style={{ fontWeight: 800 }}>
                       Transcript refinement
                     </div>
+
                     <div style={{ color: "#64748b", fontSize: 12 }}>
-                    {formatDateTime(t.created_at)}                    </div>
+                      {formatDateTime(t.created_at)}
+                    </div>
                   </div>
 
                   <button
                     style={{
                       ...primaryButton,
-                      opacity: busyId === t.id || !hasRawText ? 0.65 : 1,
+                      opacity: busyId === t.id || !canRun ? 0.65 : 1,
                       cursor:
-                        busyId === t.id || !hasRawText
+                        busyId === t.id || !canRun
                           ? "not-allowed"
                           : "pointer",
                     }}
-                    disabled={busyId === t.id || !hasRawText}
+                    disabled={busyId === t.id || !canRun}
                     onClick={() => refineTranscript(t)}
                   >
                     {busyId === t.id
-                      ? "Rewriting..."
-                      : !hasRawText
-                      ? "No transcript text"
-                      : selectedNotionSlides.length > 0
+                      ? "Running..."
+                      : hasRawText && hasSlideContext
                       ? "Rewrite with notes + slides"
-                      : "Rewrite with notes"}
+                      : hasRawText
+                      ? "Rewrite with notes"
+                      : hasSlideContext
+                      ? "Sync slides to RAG"
+                      : "No transcript text"}
                   </button>
                 </div>
 
@@ -359,8 +407,8 @@ export function TranscriptRefinePanel({
                       fontSize: 12.5,
                     }}
                   >
-                    이 transcript row는 비어 있습니다. 업로드 placeholder일 가능성이
-                    높습니다. 전사 생성 후 rewrite를 실행하세요.
+                    이 transcript row는 비어 있습니다. 선택된 slide context가
+                    있으면 rewrite 없이 meeting RAG chunk만 업데이트합니다.
                   </div>
                 )}
 
@@ -377,15 +425,18 @@ export function TranscriptRefinePanel({
                     placeholder={`예:\nA = 김현우 교수님\nB = 서진우\nC = 진승완 박사님`}
                     style={textarea}
                   />
+
                   <div
                     style={{ marginTop: 6, fontSize: 12, color: "#64748b" }}
                   >
-                    입력한 speaker mapping은 rewrite 때 A/B/C 라벨을 실제 이름으로 치환하는 데 사용됩니다.
+                    입력한 speaker mapping은 rewrite 때 A/B/C 라벨을 실제
+                    이름으로 치환하는 데 사용됩니다.
                   </div>
                 </div>
 
                 <details style={rawDetails}>
                   <summary style={rawSummary}>Show raw transcript</summary>
+
                   <div style={{ marginTop: 10 }}>
                     <pre style={pre}>{t.full_text}</pre>
                   </div>
@@ -408,8 +459,9 @@ export function TranscriptRefinePanel({
                     {t.refinement_context && (
                       <details style={rawDetails}>
                         <summary style={rawSummary}>
-                          Show refinement context
+                          Show rewrite metadata
                         </summary>
+
                         <div style={{ marginTop: 10 }}>
                           <pre style={pre}>{t.refinement_context}</pre>
                         </div>
@@ -427,7 +479,11 @@ export function TranscriptRefinePanel({
                       textAlign: "center",
                     }}
                   >
-                    Speaker mapping을 입력한 뒤 Rewrite with notes를 실행하면 refined transcript가 생성됩니다.
+                    {hasRawText
+                      ? "Speaker mapping을 입력한 뒤 Rewrite with notes를 실행하면 refined transcript가 생성됩니다."
+                      : hasSlideContext
+                      ? "전사 텍스트가 없으므로 실행 시 slide context만 meeting RAG chunks에 동기화됩니다."
+                      : "전사 텍스트가 없습니다. 전사를 생성하거나 slide context를 선택하세요."}
                   </div>
                 )}
               </div>

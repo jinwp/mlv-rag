@@ -191,6 +191,7 @@ export default async function MeetingDetailPage({
             <span className="mono" style={{ color: "#3a4252" }}>
               📅 {meeting.date} ({weekday(meeting.date)})
             </span>
+
             <span>👥 {(meeting.participants ?? []).join(", ")}</span>
           </div>
         </div>
@@ -211,9 +212,12 @@ export default async function MeetingDetailPage({
           }
           rightRailChildren={
             <>
-              <MeetingChatContextPanel meetingId={meeting.id} />
+              <MeetingChatContextPanel
+                key="meeting-chat-context"
+                meetingId={meeting.id}
+              />
 
-              <div style={card}>
+              <div key="meeting-notes" style={card}>
                 <div style={cardHead}>
                   <span
                     style={{
@@ -224,6 +228,7 @@ export default async function MeetingDetailPage({
                   >
                     자체 메모
                   </span>
+
                   <span
                     className="mono"
                     style={{ fontSize: 10.5, color: "#aab2c0" }}
@@ -239,9 +244,9 @@ export default async function MeetingDetailPage({
                     overflow: "auto",
                   }}
                 >
-                  {noteList.map((n) => (
+                  {noteList.map((n, index) => (
                     <div
-                      key={n.id}
+                      key={`${n.id}-${index}`}
                       style={{
                         display: "flex",
                         gap: 11,

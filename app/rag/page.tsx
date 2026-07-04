@@ -26,6 +26,14 @@ type IndexResponse = {
   details?: unknown;
 };
 
+type StoredChunksResponse = {
+  meeting_id?: string;
+  count?: number;
+  chunks?: MemoryChunkInput[];
+  error?: string;
+  details?: unknown;
+};
+
 type SearchResponse = {
   question?: string;
   count?: number;
@@ -395,40 +403,76 @@ export default function RagPage() {
     setChatId((current) => current || makeClientId("chat"));
   }, []);
 
-  async function indexMeeting(dryRun: boolean) {
+  async function loadStoredChunks() {
     if (!selectedId) return;
+
     setIndexState("loading");
     setIndexMessage("");
-    if (dryRun) setPreview([]);
+    setPreview([]);
+
+    try {
+      const res = await fetch("/api/rag/chunks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meetingId: selectedId }),
+      });
+
+      const data: StoredChunksResponse = await res.json();
+
+      if (!res.ok || data.error) {
+        setIndexState("error");
+        setIndexMessage(
+          `${data.error ?? "load chunks failed"} ${detailText(
+            data.details
+          )}`.trim()
+        );
+        return;
+      }
+
+      setPreview(data.chunks ?? []);
+      setShowChunks(true);
+      setIndexMessage(`${data.count ?? 0} stored chunks displayed`);
+      setIndexState("done");
+    } catch (err) {
+      setIndexState("error");
+      setIndexMessage(
+        err instanceof Error ? err.message : "chunk load request failed"
+      );
+    }
+  }
+  async function indexMeeting() {
+    if (!selectedId) return;
+
+    setIndexState("loading");
+    setIndexMessage("");
 
     try {
       const res = await fetch("/api/rag/index-meeting", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ meetingId: selectedId, dryRun }),
+        body: JSON.stringify({ meetingId: selectedId, dryRun: false }),
       });
+
       const data: IndexResponse = await res.json();
 
       if (!res.ok || data.error) {
         setIndexState("error");
-        setIndexMessage(`${data.error ?? "index failed"} ${detailText(data.details)}`.trim());
+        setIndexMessage(
+          `${data.error ?? "index failed"} ${detailText(data.details)}`.trim()
+        );
         return;
       }
 
-      if (dryRun) {
-        setPreview(data.chunks ?? []);
-        setShowChunks(true);
-        setIndexMessage(`${data.count ?? 0} chunks displayed`);
-      } else {
-        setPreview([]);
-        setShowChunks(false);
-        setIndexMessage(`${data.count ?? 0} chunks reindexed`);
-      }
+      setIndexMessage(`${data.count ?? 0} chunks reindexed`);
+
+      await loadStoredChunks();
 
       setIndexState("done");
     } catch (err) {
       setIndexState("error");
-      setIndexMessage(err instanceof Error ? err.message : "index request failed");
+      setIndexMessage(
+        err instanceof Error ? err.message : "index request failed"
+      );
     }
   }
 
@@ -844,7 +888,7 @@ export default function RagPage() {
                           } else if (preview.length > 0) {
                             setShowChunks(true);
                           } else {
-                            indexMeeting(true);
+                            loadStoredChunks();
                           }
                         }}
                         disabled={indexState === "loading"}
@@ -855,7 +899,7 @@ export default function RagPage() {
 
                       <button
                         type="button"
-                        onClick={() => indexMeeting(false)}
+                        onClick={() => indexMeeting()}
                         disabled={indexState === "loading"}
                         className="mono"
                         title="Manually rebuild indexed chunks for this meeting"
@@ -1273,7 +1317,7 @@ export default function RagPage() {
             <div>
               <div style={{ fontSize: 13, fontWeight: 700, color: "#303949" }}>Chunk display</div>
               <div className="mono" style={{ fontSize: 10.5, color: "#aab2c0", marginTop: 2 }}>
-                CURRENT CHUNKER
+                STORED RAG CHUNKS
               </div>
             </div>
 
@@ -1351,7 +1395,7 @@ export default function RagPage() {
               >
                 {showChunks
                   ? "표시할 chunk가 없습니다."
-                  : "Display chunks를 누르면 현재 chunker 기준 청크를 확인합니다."}
+                  : "Display chunks를 누르면 현재 DB에 저장된 RAG chunks를 확인합니다."}
               </div>
             )}
           </div>
