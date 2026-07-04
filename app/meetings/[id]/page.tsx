@@ -3,10 +3,10 @@ import { notFound } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { weekday } from "@/lib/format";
 import type { Meeting, Note, Photo, Transcript } from "@/lib/types";
-import { TranscriptRefinePanel } from "@/components/TranscriptRefinePanel";
 import { PhotoUploadPanel } from "@/components/PhotoUploadPanel";
 import { MeetingChatContextPanel } from "@/components/MeetingChatContextPanel";
 import { MeetingSummaryPanel } from "@/components/MeetingSummaryPanel";
+import { MeetingDetailWorkspace } from "@/components/MeetingDetailWorkspace";
 
 export const dynamic = "force-dynamic";
 
@@ -27,25 +27,6 @@ const cardHead: React.CSSProperties = {
   padding: "13px 18px",
   borderBottom: "1px solid #eceff4",
   background: "#fafbfd",
-};
-
-const mainGrid: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "minmax(0, 1fr) 370px",
-  gap: 20,
-  alignItems: "start",
-};
-
-const leftColumn: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 20,
-};
-
-const rightRail: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 20,
 };
 
 const noteText: React.CSSProperties = {
@@ -214,14 +195,11 @@ export default async function MeetingDetailPage({
           </div>
         </div>
 
-        <div style={mainGrid}>
-          <div style={leftColumn}>
-            <TranscriptRefinePanel
-              meeting={meeting}
-              notes={noteList}
-              transcripts={transcript}
-            />
-
+        <MeetingDetailWorkspace
+          meeting={meeting}
+          notes={noteList}
+          transcripts={transcript}
+          summaryPanel={
             <MeetingSummaryPanel
               meetingId={meeting.id}
               initialSummary={meeting.summary_text ?? ""}
@@ -230,91 +208,91 @@ export default async function MeetingDetailPage({
               }
               initialGeneratedAt={meeting.summary_generated_at ?? ""}
             />
-          </div>
+          }
+          rightRailChildren={
+            <>
+              <MeetingChatContextPanel meetingId={meeting.id} />
 
-          <div style={rightRail}>
-            <MeetingChatContextPanel meetingId={meeting.id} />
+              <div style={card}>
+                <div style={cardHead}>
+                  <span
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: "#3a4252",
+                    }}
+                  >
+                    자체 메모
+                  </span>
+                  <span
+                    className="mono"
+                    style={{ fontSize: 10.5, color: "#aab2c0" }}
+                  >
+                    NOTES
+                  </span>
+                </div>
 
-            <div style={card}>
-              <div style={cardHead}>
-                <span
+                <div
                   style={{
-                    fontSize: 13,
-                    fontWeight: 600,
-                    color: "#3a4252",
+                    padding: "8px 6px",
+                    maxHeight: 520,
+                    overflow: "auto",
                   }}
                 >
-                  자체 메모
-                </span>
-                <span
-                  className="mono"
-                  style={{ fontSize: 10.5, color: "#aab2c0" }}
-                >
-                  NOTES
-                </span>
-              </div>
-
-              <div
-                style={{
-                  padding: "8px 6px",
-                  maxHeight: 520,
-                  overflow: "auto",
-                }}
-              >
-                {noteList.map((n) => (
-                  <div
-                    key={n.id}
-                    style={{
-                      display: "flex",
-                      gap: 11,
-                      padding: "9px 12px",
-                      borderRadius: 8,
-                    }}
-                  >
-                    <span
-                      className="mono"
+                  {noteList.map((n) => (
+                    <div
+                      key={n.id}
                       style={{
-                        flex: "none",
-                        fontSize: 11,
-                        fontWeight: 600,
-                        color: "#3550c7",
-                        paddingTop: 2,
+                        display: "flex",
+                        gap: 11,
+                        padding: "9px 12px",
+                        borderRadius: 8,
                       }}
                     >
-                      [{n.elapsed_seconds}]
-                    </span>
+                      <span
+                        className="mono"
+                        style={{
+                          flex: "none",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          color: "#3550c7",
+                          paddingTop: 2,
+                        }}
+                      >
+                        [{n.elapsed_seconds}]
+                      </span>
 
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <CollapsibleNote content={n.content} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <CollapsibleNote content={n.content} />
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
 
-                {noteList.length === 0 && (
-                  <div
-                    style={{
-                      padding: 16,
-                      textAlign: "center",
-                      color: "#aab2c0",
-                      fontSize: 12.5,
-                    }}
-                  >
-                    메모 없음
-                  </div>
-                )}
+                  {noteList.length === 0 && (
+                    <div
+                      style={{
+                        padding: 16,
+                        textAlign: "center",
+                        color: "#aab2c0",
+                        fontSize: 12.5,
+                      }}
+                    >
+                      메모 없음
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          </div>
-        </div>
-
-        <div style={{ marginTop: 20 }}>
-          <PhotoUploadPanel
-            meeting={meeting}
-            initialPhotos={photoList}
-            transcripts={transcript}
-            notes={noteList}
-          />
-        </div>
+            </>
+          }
+          photoPanel={
+            <PhotoUploadPanel
+              meeting={meeting}
+              initialPhotos={photoList}
+              transcripts={transcript}
+              notes={noteList}
+            />
+          }
+        />
       </div>
     </div>
   );

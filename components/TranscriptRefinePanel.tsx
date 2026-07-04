@@ -3,11 +3,13 @@
 import { useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import type { Meeting, Note, Transcript } from "@/lib/types";
+import type { NotionSlideListItem } from "@/components/NotionSlideContextPicker";
 
 type Props = {
   meeting: Meeting;
   notes: Note[];
   transcripts: Transcript[];
+  selectedNotionSlides?: NotionSlideListItem[];
 };
 
 const card: React.CSSProperties = {
@@ -97,10 +99,56 @@ const textarea: React.CSSProperties = {
   background: "#fbfcfe",
 };
 
+const contextNotice: React.CSSProperties = {
+  padding: 10,
+  borderRadius: 10,
+  background: "#f6f8ff",
+  border: "1px solid #dbe3ff",
+  color: "#334155",
+  fontSize: 12.5,
+  lineHeight: 1.5,
+};
+
+function serializeRefinementContext(args: {
+  contextSummary: string;
+  refinementContext: unknown;
+}) {
+  if (args.refinementContext) {
+    if (typeof args.refinementContext === "string") {
+      return args.refinementContext;
+    }
+
+    return JSON.stringify(args.refinementContext, null, 2);
+  }
+
+  return args.contextSummary;
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  const parts = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date);
+
+  return `${parts} KST`;
+}
+
 export function TranscriptRefinePanel({
   meeting,
   notes,
   transcripts,
+  selectedNotionSlides = [],
 }: Props) {
   const [items, setItems] = useState<Transcript[]>(transcripts);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -108,6 +156,15 @@ export function TranscriptRefinePanel({
   const [speakerMaps, setSpeakerMaps] = useState<Record<string, string>>({});
 
   async function refineTranscript(t: Transcript) {
+    const rawText = typeof t.full_text === "string" ? t.full_text : "";
+
+    if (!rawText.trim()) {
+      setError(
+        "이 transcript에는 full_text가 없습니다. 먼저 전사를 생성하거나 full_text가 있는 transcript를 선택해야 합니다."
+      );
+      return;
+    }
+
     setBusyId(t.id);
     setError(null);
 
@@ -115,13 +172,21 @@ export function TranscriptRefinePanel({
     const refinedAt = new Date().toISOString();
 
     try {
+      const notionSlidePageIds = selectedNotionSlides.map(
+        (slide) => slide.pageId
+      );
+
+      const notionSlidePathMap = Object.fromEntries(
+        selectedNotionSlides.map((slide) => [slide.pageId, slide.path])
+      );
+
       const res = await fetch("/api/refine-transcript", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          rawText: t.full_text,
+          rawText,
           speakerMapText,
           meeting: {
             title: meeting.title,
@@ -134,6 +199,8 @@ export function TranscriptRefinePanel({
             elapsed_seconds: n.elapsed_seconds,
             content: n.content,
           })),
+          notionSlidePageIds,
+          notionSlidePathMap,
         }),
       });
 
@@ -145,12 +212,16 @@ export function TranscriptRefinePanel({
 
       const refinedText = data.refinedText as string;
       const contextSummary = data.contextSummary as string;
+      const refinementContext = serializeRefinementContext({
+        contextSummary,
+        refinementContext: data.refinementContext,
+      });
 
       const { error: updateError } = await supabase
         .from("transcripts")
         .update({
           refined_text: refinedText,
-          refinement_context: contextSummary,
+          refinement_context: refinementContext,
           refined_at: refinedAt,
         })
         .eq("id", t.id);
@@ -165,7 +236,7 @@ export function TranscriptRefinePanel({
             ? {
                 ...item,
                 refined_text: refinedText,
-                refinement_context: contextSummary,
+                refinement_context: refinementContext,
                 refined_at: refinedAt,
               }
             : item
@@ -185,7 +256,7 @@ export function TranscriptRefinePanel({
         <div>
           <div style={{ fontWeight: 800 }}>전사 (STT)</div>
           <div style={{ color: "#64748b", fontSize: 12 }}>
-            raw transcript → speaker-aware notes-context rewrite
+            raw transcript → speaker-aware notes/slide-context rewrite
           </div>
         </div>
       </div>
@@ -206,111 +277,162 @@ export function TranscriptRefinePanel({
           </div>
         )}
 
+        {selectedNotionSlides.length > 0 && (
+          <div style={contextNotice}>
+            Using {selectedNotionSlides.length} selected Notion slide context
+            page{selectedNotionSlides.length > 1 ? "s" : ""}. The server reads
+            them directly from Notion at rewrite time.
+          </div>
+        )}
+
         {items.length === 0 ? (
           <p style={{ margin: 0, color: "#64748b" }}>전사 기록이 없습니다.</p>
         ) : (
-          items.map((t) => (
-            <div
-              key={t.id}
-              style={{
-                display: "grid",
-                gap: 14,
-                border: "1px solid #eef2f7",
-                borderRadius: 12,
-                padding: 14,
-              }}
-            >
+          items.map((t) => {
+            const hasRawText =
+              typeof t.full_text === "string" &&
+              t.full_text.trim().length > 0;
+
+            return (
               <div
+                key={t.id}
                 style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 12,
-                  alignItems: "center",
+                  display: "grid",
+                  gap: 14,
+                  border: "1px solid #eef2f7",
+                  borderRadius: 12,
+                  padding: 14,
                 }}
               >
-                <div>
-                  <div style={{ fontWeight: 800 }}>
-                    Transcript refinement
-                  </div>
-                  <div style={{ color: "#64748b", fontSize: 12 }}>
-                    {new Date(t.created_at).toLocaleString()}
-                  </div>
-                </div>
-
-                <button
-                  style={{
-                    ...primaryButton,
-                    opacity: busyId === t.id ? 0.65 : 1,
-                    cursor: busyId === t.id ? "not-allowed" : "pointer",
-                  }}
-                  disabled={busyId === t.id}
-                  onClick={() => refineTranscript(t)}
-                >
-                  {busyId === t.id ? "Rewriting..." : "Rewrite with notes"}
-                </button>
-              </div>
-
-              {t.audio_path && (
-                <div style={{ fontSize: 12, color: "#64748b" }}>
-                  audio: {t.audio_path}
-                </div>
-              )}
-
-              <div>
-                <div style={inputLabel}>Speaker mapping</div>
-                <textarea
-                  value={speakerMaps[t.id] ?? ""}
-                  onChange={(e) =>
-                    setSpeakerMaps((prev) => ({
-                      ...prev,
-                      [t.id]: e.target.value,
-                    }))
-                  }
-                  placeholder={`예:\nA = 김현우 교수님\nB = 서진우\nC = 진승완 박사님`}
-                  style={textarea}
-                />
-                <div style={{ marginTop: 6, fontSize: 12, color: "#64748b" }}>
-                  입력한 speaker mapping은 rewrite 때 A/B/C 라벨을 실제 이름으로 치환하는 데 사용됩니다.
-                </div>
-              </div>
-
-              <details style={rawDetails}>
-                <summary style={rawSummary}>Show raw transcript</summary>
-                <div style={{ marginTop: 10 }}>
-                  <pre style={pre}>{t.full_text}</pre>
-                </div>
-              </details>
-
-              {t.refined_text ? (
-                <>
-                  <div style={{ fontWeight: 800, marginTop: 2 }}>
-                    Refined transcript
-                  </div>
-
-                  <pre style={refinedScrollBox}>{t.refined_text}</pre>
-
-                  {t.refined_at && (
-                    <div style={{ color: "#64748b", fontSize: 12 }}>
-                      refined at {new Date(t.refined_at).toLocaleString()}
-                    </div>
-                  )}
-                </>
-              ) : (
                 <div
                   style={{
-                    padding: 14,
-                    borderRadius: 10,
-                    border: "1px dashed #d5dce6",
-                    color: "#94a3b8",
-                    fontSize: 13,
-                    textAlign: "center",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    alignItems: "center",
                   }}
                 >
-                  Speaker mapping을 입력한 뒤 Rewrite with notes를 실행하면 refined transcript가 생성됩니다.
+                  <div>
+                    <div style={{ fontWeight: 800 }}>
+                      Transcript refinement
+                    </div>
+                    <div style={{ color: "#64748b", fontSize: 12 }}>
+                    {formatDateTime(t.created_at)}                    </div>
+                  </div>
+
+                  <button
+                    style={{
+                      ...primaryButton,
+                      opacity: busyId === t.id || !hasRawText ? 0.65 : 1,
+                      cursor:
+                        busyId === t.id || !hasRawText
+                          ? "not-allowed"
+                          : "pointer",
+                    }}
+                    disabled={busyId === t.id || !hasRawText}
+                    onClick={() => refineTranscript(t)}
+                  >
+                    {busyId === t.id
+                      ? "Rewriting..."
+                      : !hasRawText
+                      ? "No transcript text"
+                      : selectedNotionSlides.length > 0
+                      ? "Rewrite with notes + slides"
+                      : "Rewrite with notes"}
+                  </button>
                 </div>
-              )}
-            </div>
-          ))
+
+                {t.audio_path && (
+                  <div style={{ fontSize: 12, color: "#64748b" }}>
+                    audio: {t.audio_path}
+                  </div>
+                )}
+
+                {!hasRawText && (
+                  <div
+                    style={{
+                      padding: 12,
+                      borderRadius: 10,
+                      background: "#fff7ed",
+                      border: "1px solid #fed7aa",
+                      color: "#9a3412",
+                      fontSize: 12.5,
+                    }}
+                  >
+                    이 transcript row는 비어 있습니다. 업로드 placeholder일 가능성이
+                    높습니다. 전사 생성 후 rewrite를 실행하세요.
+                  </div>
+                )}
+
+                <div>
+                  <div style={inputLabel}>Speaker mapping</div>
+                  <textarea
+                    value={speakerMaps[t.id] ?? ""}
+                    onChange={(e) =>
+                      setSpeakerMaps((prev) => ({
+                        ...prev,
+                        [t.id]: e.target.value,
+                      }))
+                    }
+                    placeholder={`예:\nA = 김현우 교수님\nB = 서진우\nC = 진승완 박사님`}
+                    style={textarea}
+                  />
+                  <div
+                    style={{ marginTop: 6, fontSize: 12, color: "#64748b" }}
+                  >
+                    입력한 speaker mapping은 rewrite 때 A/B/C 라벨을 실제 이름으로 치환하는 데 사용됩니다.
+                  </div>
+                </div>
+
+                <details style={rawDetails}>
+                  <summary style={rawSummary}>Show raw transcript</summary>
+                  <div style={{ marginTop: 10 }}>
+                    <pre style={pre}>{t.full_text}</pre>
+                  </div>
+                </details>
+
+                {t.refined_text ? (
+                  <>
+                    <div style={{ fontWeight: 800, marginTop: 2 }}>
+                      Refined transcript
+                    </div>
+
+                    <pre style={refinedScrollBox}>{t.refined_text}</pre>
+
+                    {t.refined_at && (
+                      <div style={{ color: "#64748b", fontSize: 12 }}>
+                        refined at {formatDateTime(t.refined_at)}
+                      </div>
+                    )}
+
+                    {t.refinement_context && (
+                      <details style={rawDetails}>
+                        <summary style={rawSummary}>
+                          Show refinement context
+                        </summary>
+                        <div style={{ marginTop: 10 }}>
+                          <pre style={pre}>{t.refinement_context}</pre>
+                        </div>
+                      </details>
+                    )}
+                  </>
+                ) : (
+                  <div
+                    style={{
+                      padding: 14,
+                      borderRadius: 10,
+                      border: "1px dashed #d5dce6",
+                      color: "#94a3b8",
+                      fontSize: 13,
+                      textAlign: "center",
+                    }}
+                  >
+                    Speaker mapping을 입력한 뒤 Rewrite with notes를 실행하면 refined transcript가 생성됩니다.
+                  </div>
+                )}
+              </div>
+            );
+          })
         )}
       </div>
     </section>
