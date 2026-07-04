@@ -7,6 +7,7 @@ import { PhotoUploadPanel } from "@/components/PhotoUploadPanel";
 import { MeetingChatContextPanel } from "@/components/MeetingChatContextPanel";
 import { MeetingSummaryPanel } from "@/components/MeetingSummaryPanel";
 import { MeetingDetailWorkspace } from "@/components/MeetingDetailWorkspace";
+import { MeetingWriteToNotionPanel } from "@/components/MeetingWriteToNotionPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -287,6 +288,10 @@ export default async function MeetingDetailPage({
                   )}
                 </div>
               </div>
+              <MeetingWriteToNotionPanel
+                key="write-to-notion"
+                meeting={meeting}
+              />
             </>
           }
           photoPanel={

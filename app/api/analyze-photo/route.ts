@@ -106,9 +106,12 @@ function buildPrompt(args: {
             "Extract visible mathematical equations and convert them to Notion equation-block compatible KaTeX.",
             "Return raw LaTeX content only in the latex field.",
             "Do not include Markdown math delimiters such as \\[ \\], $$ $$, or \\( \\).",
-            "If there are multiple equations, combine them using \\begin{aligned} ... \\end{aligned}.",
+            "If there are multiple equations or one multi-line derivation, combine them into one complete LaTeX block using \\begin{aligned} ... \\end{aligned}.",
+            "Do not wrap each line with separate math delimiters.",
+            "If using \\begin{aligned}, include both \\begin{aligned} and \\end{aligned} in the same latex field.",
+            "Use line breaks with \\\\ inside aligned blocks.",
             "Avoid TeX quote syntax such as ``text''. Use plain text inside \\text{...}.",
-            "If a symbol, subscript, superscript, or operator is unclear, mark that local part as \\text{[unclear]}.",
+            "If a symbol, subscript, superscript, or operator is unclear, mark only that local part as \\text{[unclear]}.",
           ].join("\n")
         : [
             "Describe the visible diagram structure.",
