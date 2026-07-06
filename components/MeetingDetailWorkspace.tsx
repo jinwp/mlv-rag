@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { Meeting, Note, Transcript } from "@/lib/types";
 import { TranscriptRefinePanel } from "@/components/TranscriptRefinePanel";
+import { MeetingNotesPanel } from "@/components/MeetingNotesPanel";
 import NotionSlideContextPicker, {
   NotionSlideListItem,
 } from "@/components/NotionSlideContextPicker";
@@ -65,6 +66,7 @@ export function MeetingDetailWorkspace({
   const [selectedNotionSlides, setSelectedNotionSlides] = useState<
     NotionSlideListItem[]
   >([]);
+  const [noteList, setNoteList] = useState<Note[]>(notes);
 
   const summaryPanelWithContext = isValidElement(summaryPanel)
     ? cloneElement(summaryPanel as ReactElement<SummaryPanelInjectedProps>, {
@@ -78,7 +80,7 @@ export function MeetingDetailWorkspace({
         <div style={leftColumn}>
           <TranscriptRefinePanel
             meeting={meeting}
-            notes={notes}
+            notes={noteList}
             transcripts={transcripts}
             selectedNotionSlides={selectedNotionSlides}
           />
@@ -98,6 +100,12 @@ export function MeetingDetailWorkspace({
           <div style={contextLabel}>Meeting context</div>
 
           {rightRailChildren}
+
+          <MeetingNotesPanel
+            meetingId={meeting.id}
+            notes={noteList}
+            onNotesChange={setNoteList}
+          />
         </div>
       </div>
 

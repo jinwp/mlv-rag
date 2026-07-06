@@ -218,76 +218,7 @@ export default async function MeetingDetailPage({
                 meetingId={meeting.id}
               />
 
-              <div key="meeting-notes" style={card}>
-                <div style={cardHead}>
-                  <span
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 600,
-                      color: "#3a4252",
-                    }}
-                  >
-                    자체 메모
-                  </span>
-
-                  <span
-                    className="mono"
-                    style={{ fontSize: 10.5, color: "#aab2c0" }}
-                  >
-                    NOTES
-                  </span>
-                </div>
-
-                <div
-                  style={{
-                    padding: "8px 6px",
-                    maxHeight: 520,
-                    overflow: "auto",
-                  }}
-                >
-                  {noteList.map((n, index) => (
-                    <div
-                      key={`${n.id}-${index}`}
-                      style={{
-                        display: "flex",
-                        gap: 11,
-                        padding: "9px 12px",
-                        borderRadius: 8,
-                      }}
-                    >
-                      <span
-                        className="mono"
-                        style={{
-                          flex: "none",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          color: "#3550c7",
-                          paddingTop: 2,
-                        }}
-                      >
-                        [{n.elapsed_seconds}]
-                      </span>
-
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <CollapsibleNote content={n.content} />
-                      </div>
-                    </div>
-                  ))}
-
-                  {noteList.length === 0 && (
-                    <div
-                      style={{
-                        padding: 16,
-                        textAlign: "center",
-                        color: "#aab2c0",
-                        fontSize: 12.5,
-                      }}
-                    >
-                      메모 없음
-                    </div>
-                  )}
-                </div>
-              </div>
+              
               <MeetingWriteToNotionPanel
                 key="write-to-notion"
                 meeting={meeting}
