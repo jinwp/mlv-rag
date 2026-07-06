@@ -8,16 +8,16 @@ import {
 
 export const dynamic = "force-dynamic";
 
-function toStorageUrl(path?: string | null) {
+function toStorageUrl(path?: string | null): string | null {
   const cleaned = path?.trim();
 
-  if (!cleaned) return "";
+  if (!cleaned) return null;
 
   if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) {
     return cleaned;
   }
 
-  return publicUrl(cleaned);
+  return publicUrl(cleaned) ?? null;
 }
 
 function fmtElapsed(seconds?: number | null) {
@@ -62,33 +62,41 @@ function buildAssetOptions(args: {
     const elapsed = fmtElapsed(photo.elapsed_seconds);
 
     if (photo.generated_figure_path?.trim()) {
-      assets.push({
-        assetId: `figure:${photo.id}`,
-        kind: "figure",
-        meetingId: photo.meeting_id,
-        meetingLabel,
-        title: `Generated figure · ${elapsed}`,
-        url: toStorageUrl(photo.generated_figure_path),
-        preview:
-          photo.figure_prompt?.trim() ||
-          photo.diagram_summary?.trim() ||
-          "Generated figure",
-      });
+      const url = toStorageUrl(photo.generated_figure_path);
+
+      if (url) {
+        assets.push({
+          assetId: `figure:${photo.id}`,
+          kind: "figure",
+          meetingId: photo.meeting_id,
+          meetingLabel,
+          title: `Generated figure · ${elapsed}`,
+          url,
+          preview:
+            photo.figure_prompt?.trim() ||
+            photo.diagram_summary?.trim() ||
+            "Generated figure",
+        });
+      }
     }
 
     if (photo.storage_path?.trim()) {
-      assets.push({
-        assetId: `image:${photo.id}`,
-        kind: "image",
-        meetingId: photo.meeting_id,
-        meetingLabel,
-        title: `Original image · ${elapsed}`,
-        url: toStorageUrl(photo.storage_path),
-        preview:
-          photo.diagram_summary?.trim() ||
-          photo.extracted_text?.trim() ||
-          "Original meeting image",
-      });
+      const url = toStorageUrl(photo.storage_path);
+
+      if (url) {
+        assets.push({
+          assetId: `image:${photo.id}`,
+          kind: "image",
+          meetingId: photo.meeting_id,
+          meetingLabel,
+          title: `Original image · ${elapsed}`,
+          url,
+          preview:
+            photo.diagram_summary?.trim() ||
+            photo.extracted_text?.trim() ||
+            "Original meeting image",
+        });
+      }
     }
 
     if (photo.extracted_latex?.trim()) {
