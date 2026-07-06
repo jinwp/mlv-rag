@@ -1,11 +1,21 @@
 "use client";
 
-import { ReactNode, useState } from "react";
+import {
+  ReactElement,
+  ReactNode,
+  cloneElement,
+  isValidElement,
+  useState,
+} from "react";
 import type { Meeting, Note, Transcript } from "@/lib/types";
 import { TranscriptRefinePanel } from "@/components/TranscriptRefinePanel";
 import NotionSlideContextPicker, {
   NotionSlideListItem,
 } from "@/components/NotionSlideContextPicker";
+
+type SummaryPanelInjectedProps = {
+  selectedNotionSlides?: NotionSlideListItem[];
+};
 
 type Props = {
   meeting: Meeting;
@@ -56,6 +66,12 @@ export function MeetingDetailWorkspace({
     NotionSlideListItem[]
   >([]);
 
+  const summaryPanelWithContext = isValidElement(summaryPanel)
+    ? cloneElement(summaryPanel as ReactElement<SummaryPanelInjectedProps>, {
+        selectedNotionSlides,
+      })
+    : summaryPanel;
+
   return (
     <>
       <div style={mainGrid}>
@@ -67,7 +83,7 @@ export function MeetingDetailWorkspace({
             selectedNotionSlides={selectedNotionSlides}
           />
 
-          {summaryPanel}
+          {summaryPanelWithContext}
         </div>
 
         <div style={rightRail}>
@@ -75,7 +91,7 @@ export function MeetingDetailWorkspace({
 
           <NotionSlideContextPicker
             title="Slide context"
-            description="선택한 Notion slide는 rewrite 실행 시점마다 서버가 직접 다시 읽습니다."
+            description="선택한 Notion slide는 rewrite와 summary 실행 시점마다 서버가 직접 다시 읽습니다."
             onChange={setSelectedNotionSlides}
           />
 

@@ -14,8 +14,10 @@ import {
   heading1Block,
   heading3Block,
   imageBlock,
+  markdownToNotionBlocks,
   paragraphBlock,
   toggleBlock,
+  toggleBlocks,
   type NotionBlock,
 } from "@/lib/notion/write";
 
@@ -258,7 +260,8 @@ async function createTranscriptAssetPages(args: {
 
     const blocks: NotionBlock[] = [
       heading1Block(title),
-      toggleBlock("Metadata", [
+
+      ...toggleBlocks("Metadata", [
         bulletBlock(`Source: transcript ${item.index + 1}`),
         bulletBlock(`Version: ${item.preferred.version}`),
         bulletBlock(`Created at: ${item.transcript.created_at ?? "Unknown"}`),
@@ -266,7 +269,8 @@ async function createTranscriptAssetPages(args: {
           ? bulletBlock(`Audio path: ${item.transcript.audio_path}`)
           : paragraphBlock("Audio path: None"),
       ]),
-      toggleBlock("Full transcript", paragraphBlocks(item.preferred.text)),
+
+      ...toggleBlocks("Full transcript", paragraphBlocks(item.preferred.text)),
     ];
 
     await appendBlocks({
@@ -364,7 +368,12 @@ async function createVisualAssetPages(args: {
 
     if (photo.extracted_text?.trim()) {
       imagePageBlocks.push(
-        toggleBlock("OCR text", paragraphBlocks(photo.extracted_text))
+        ...toggleBlocks(
+          "OCR text",
+          markdownToNotionBlocks(photo.extracted_text, {
+            compactHeadings: true,
+          })
+        )
       );
     }
 
@@ -379,7 +388,12 @@ async function createVisualAssetPages(args: {
 
     if (photo.figure_prompt?.trim()) {
       imagePageBlocks.push(
-        toggleBlock("Figure prompt", paragraphBlocks(photo.figure_prompt))
+        ...toggleBlocks(
+          "Figure prompt",
+          markdownToNotionBlocks(photo.figure_prompt, {
+            compactHeadings: true,
+          })
+        )
       );
     }
 
@@ -482,7 +496,12 @@ async function createVisualAssetPages(args: {
 
       if (photo.figure_prompt?.trim()) {
         figurePageBlocks.push(
-          toggleBlock("Figure prompt", paragraphBlocks(photo.figure_prompt))
+          ...toggleBlocks(
+            "Figure prompt",
+            markdownToNotionBlocks(photo.figure_prompt, {
+              compactHeadings: true,
+            })
+          )
         );
       }
 
@@ -657,7 +676,7 @@ function buildMeetingBlocks(args: {
   const blocks: NotionBlock[] = [
     heading1Block(meeting.title ?? "Untitled meeting"),
 
-    toggleBlock("Metadata", [
+    ...toggleBlocks("Metadata", [
       bulletBlock(`Date: ${meeting.date ?? "Unknown"}`),
       bulletBlock(`Project: ${meeting.project_tag ?? "미분류"}`),
       bulletBlock(`Participants: ${participants}`),
@@ -666,20 +685,22 @@ function buildMeetingBlocks(args: {
 
     dividerBlock(),
 
-    toggleBlock(
+    ...toggleBlocks(
       "Summary",
       meeting.summary_text?.trim()
-        ? paragraphBlocks(meeting.summary_text)
+        ? markdownToNotionBlocks(meeting.summary_text, {
+            compactHeadings: true,
+          })
         : [paragraphBlock("Summary has not been generated yet.")]
     ),
 
     dividerBlock(),
 
-    toggleBlock("Human notes", noteBlocks(notes)),
+    ...toggleBlocks("Human notes", noteBlocks(notes)),
 
     dividerBlock(),
 
-    toggleBlock(
+    ...toggleBlocks(
       "Visual notes",
       visualResultBlocks({
         photos,
@@ -689,7 +710,7 @@ function buildMeetingBlocks(args: {
 
     dividerBlock(),
 
-    toggleBlock(
+    ...toggleBlocks(
       "Transcript",
       transcriptResultBlocks({
         transcripts,

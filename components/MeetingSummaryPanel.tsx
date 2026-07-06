@@ -1,13 +1,33 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import type { NotionSlideListItem } from "@/components/NotionSlideContextPicker";
 
 type Props = {
   meetingId: string;
   initialSummary?: string | null;
   initialProvider?: string | null;
   initialGeneratedAt?: string | null;
+  selectedNotionSlides?: NotionSlideListItem[];
+};
+
+type SlideChunkSync = {
+  deletedExisting?: boolean;
+  insertedChunks?: number;
+  inserted_chunks?: number;
+  sourceCount?: number;
+  source_count?: number;
+};
+
+type SourceCounts = {
+  transcripts?: number;
+  refined_transcripts?: number;
+  notes?: number;
+  photos?: number;
+  visual_evidence?: number;
+  notion_slides?: number;
+  chunks?: number;
 };
 
 type SummaryResponse = {
@@ -19,6 +39,9 @@ type SummaryResponse = {
   rag_index_warning?: string;
   transcript_count?: number;
   refined_count?: number;
+  source_counts?: SourceCounts;
+  slide_chunk_sync?: SlideChunkSync;
+  slideChunkSync?: SlideChunkSync;
   error?: string;
   details?: unknown;
 };
@@ -95,7 +118,9 @@ const mdComponents = {
 
 function detailsText(details: unknown): string {
   if (!details) return "";
+
   if (typeof details === "string") return details;
+
   try {
     return JSON.stringify(details);
   } catch {
@@ -103,11 +128,40 @@ function detailsText(details: unknown): string {
   }
 }
 
+function insertedSlideChunks(sync?: SlideChunkSync) {
+  if (!sync) return 0;
+
+  return sync.insertedChunks ?? sync.inserted_chunks ?? 0;
+}
+
+function sourceMetaText(data: SummaryResponse) {
+  const counts = data.source_counts;
+
+  if (counts) {
+    return [
+      `${counts.refined_transcripts ?? data.refined_count ?? 0}/${
+        counts.transcripts ?? data.transcript_count ?? 0
+      } refined transcripts`,
+      `${counts.notes ?? 0} notes`,
+      `${counts.photos ?? 0} photos`,
+      `${counts.notion_slides ?? 0} slides`,
+      `${counts.chunks ?? 0} chunks`,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  return `${data.refined_count ?? 0}/${
+    data.transcript_count ?? 0
+  } refined transcripts used`;
+}
+
 export function MeetingSummaryPanel({
   meetingId,
   initialSummary,
   initialProvider,
   initialGeneratedAt,
+  selectedNotionSlides = [],
 }: Props) {
   const [summary, setSummary] = useState(initialSummary ?? "");
   const [provider, setProvider] = useState(initialProvider ?? "");
@@ -119,18 +173,32 @@ export function MeetingSummaryPanel({
   const [error, setError] = useState("");
   const [warning, setWarning] = useState("");
 
+  const selectedSlideSummary = useMemo(() => {
+    if (selectedNotionSlides.length === 0) return "";
+
+    return selectedNotionSlides.map((slide) => slide.path).join(" | ");
+  }, [selectedNotionSlides]);
+
   async function generateSummary() {
     setBusy(true);
     setError("");
     setWarning("");
 
     try {
+      const notionSlidePathMap = Object.fromEntries(
+        selectedNotionSlides.map((slide) => [slide.pageId, slide.path])
+      );
+
       const res = await fetch("/api/summarize-meeting", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ meetingId }),
+        body: JSON.stringify({
+          meetingId,
+          notionSlidePageIds: selectedNotionSlides.map((slide) => slide.pageId),
+          notionSlidePathMap,
+        }),
       });
 
       const data = (await res.json()) as SummaryResponse;
@@ -141,13 +209,17 @@ export function MeetingSummaryPanel({
         );
       }
 
+      const slideSync = data.slide_chunk_sync ?? data.slideChunkSync;
+      const slideChunkCount = insertedSlideChunks(slideSync);
+
       setSummary(data.summary ?? "");
       setProvider(data.provider ?? "");
       setGeneratedAt(data.summary_generated_at ?? "");
       setWarning(data.rag_index_warning ?? "");
       setMeta(
         [
-          `${data.refined_count ?? 0}/${data.transcript_count ?? 0} refined transcripts used`,
+          sourceMetaText(data),
+          slideChunkCount > 0 ? `${slideChunkCount} slide chunks synced` : "",
           data.rag_indexed
             ? "RAG indexed"
             : data.rag_index_warning
@@ -169,9 +241,10 @@ export function MeetingSummaryPanel({
     <section style={card}>
       <div style={cardHead}>
         <div>
-          <div style={{ fontWeight: 800 }}>회의 sequential summary</div>
+          <div style={{ fontWeight: 800 }}>Session summary</div>
           <div style={{ color: "#64748b", fontSize: 12 }}>
-            refined transcript 기반 시간순 요약 · RAG summary chunk로 저장
+            transcript · notes · visual evidence · selected Notion slides 기반
+            요약
           </div>
         </div>
 
@@ -190,6 +263,35 @@ export function MeetingSummaryPanel({
       </div>
 
       <div style={{ padding: 18 }}>
+        {selectedNotionSlides.length > 0 && (
+          <div
+            style={{
+              padding: 11,
+              borderRadius: 10,
+              background: "#eff6ff",
+              color: "#1e3a8a",
+              border: "1px solid #bfdbfe",
+              fontSize: 12.5,
+              lineHeight: 1.45,
+              marginBottom: 12,
+            }}
+          >
+            <div style={{ fontWeight: 800, marginBottom: 4 }}>
+              Selected slide context: {selectedNotionSlides.length}
+            </div>
+            <div
+              className="mono"
+              style={{
+                fontSize: 10.5,
+                color: "#3550c7",
+                wordBreak: "break-word",
+              }}
+            >
+              {selectedSlideSummary}
+            </div>
+          </div>
+        )}
+
         {error && (
           <div
             style={{
@@ -268,7 +370,8 @@ export function MeetingSummaryPanel({
               lineHeight: 1.55,
             }}
           >
-            Rewrite가 끝난 뒤 Generate를 누르면 전체 회의 흐름을 시간 순서로 요약하고 RAG summary chunk로 저장합니다.
+            녹음/전사 없이도 이미지 분석 결과, 자체 메모, 선택한 Notion
+            slide가 있으면 Generate로 실험 세션 요약을 생성합니다.
           </div>
         )}
       </div>
