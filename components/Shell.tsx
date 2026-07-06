@@ -5,27 +5,44 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
-type NavKey = "new" | "list" | "ask" | "rag" | "fast_ocr" | "storage";
+type NavKey =
+  | "new"
+  | "list"
+  | "ask"
+  | "rag"
+  | "fast_ocr"
+  | "storage"
+  | "slide_generation";
 
 const NAV: { key: NavKey; label: string; sub: string; href: string }[] = [
   { key: "ask", label: "검색", sub: "/ask", href: "/ask" },
   { key: "new", label: "새 회의", sub: "/meetings/new", href: "/meetings/new" },
   { key: "list", label: "회의 목록", sub: "/meetings", href: "/meetings" },
   { key: "rag", label: "회의 분석", sub: "/rag", href: "/rag" },
+  {
+    key: "slide_generation",
+    label: "슬라이드 생성",
+    sub: "/slide_generation",
+    href: "/slide_generation",
+  },
   { key: "fast_ocr", label: "Fast OCR", sub: "/fast_ocr", href: "/fast_ocr" },
   { key: "storage", label: "Storage", sub: "/storage", href: "/storage" },
 ];
 
 function groupFor(pathname: string): NavKey {
   if (pathname.startsWith("/rag")) return "rag";
+  if (pathname.startsWith("/slide_generation")) return "slide_generation";
   if (pathname.startsWith("/meetings/new")) return "new";
+
   if (pathname.startsWith("/meetings")) {
     // record screen belongs to the "new" flow, list/detail to "list"
     if (pathname.endsWith("/record")) return "new";
     return "list";
   }
+
   if (pathname.startsWith("/fast_ocr")) return "fast_ocr";
   if (pathname.startsWith("/storage")) return "storage";
+
   return "ask";
 }
 
@@ -34,12 +51,19 @@ function groupFor(pathname: string): NavKey {
 const MEETING_ROUTE = /^\/meetings\/([^/]+)(\/record)?$/;
 
 /** Header shows the meeting title instead of the raw UUID for readability. */
-function displayPath(pathname: string, titleById: Record<string, string>): string {
+function displayPath(
+  pathname: string,
+  titleById: Record<string, string>
+): string {
   const m = pathname.match(MEETING_ROUTE);
+
   if (!m || m[1] === "new") return pathname;
+
   const [, id, recordSuffix] = m;
   const title = titleById[id];
+
   if (!title) return pathname;
+
   return `/meetings/${title}${recordSuffix ?? ""}`;
 }
 
@@ -51,12 +75,14 @@ export default function Shell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let alive = true;
+
     supabase
       .from("meetings")
       .select("id", { count: "exact", head: true })
       .then(({ count }) => {
         if (alive) setCount(count ?? 0);
       });
+
     return () => {
       alive = false;
     };
@@ -64,24 +90,37 @@ export default function Shell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const m = pathname.match(MEETING_ROUTE);
+
     if (!m || m[1] === "new" || titleById[m[1]]) return;
+
     const id = m[1];
     let alive = true;
+
     supabase
       .from("meetings")
       .select("title")
       .eq("id", id)
       .single()
       .then(({ data }) => {
-        if (alive && data?.title) setTitleById((prev) => ({ ...prev, [id]: data.title }));
+        if (alive && data?.title) {
+          setTitleById((prev) => ({ ...prev, [id]: data.title }));
+        }
       });
+
     return () => {
       alive = false;
     };
   }, [pathname, titleById]);
 
   return (
-    <div style={{ display: "flex", height: "100vh", width: "100%", overflow: "hidden" }}>
+    <div
+      style={{
+        display: "flex",
+        height: "100vh",
+        width: "100%",
+        overflow: "hidden",
+      }}
+    >
       {/* ============ SIDEBAR ============ */}
       <aside
         style={{
@@ -124,13 +163,27 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           >
             ›
           </div>
+
           <div>
-            <div style={{ fontWeight: 700, fontSize: 16, letterSpacing: "-.01em", lineHeight: 1.1 }}>
+            <div
+              style={{
+                fontWeight: 700,
+                fontSize: 16,
+                letterSpacing: "-.01em",
+                lineHeight: 1.1,
+              }}
+            >
               Lab <span style={{ color: "#3550c7" }}>RAG</span>
             </div>
+
             <div
               className="mono"
-              style={{ fontSize: 10, color: "#8a93a3", marginTop: 2, letterSpacing: ".02em" }}
+              style={{
+                fontSize: 10,
+                color: "#8a93a3",
+                marginTop: 2,
+                letterSpacing: ".02em",
+              }}
             >
               KAIST CS · 생성AI/로보틱스
             </div>
@@ -140,6 +193,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         <nav style={{ display: "flex", flexDirection: "column", gap: 3 }}>
           {NAV.map((n) => {
             const active = group === n.key;
+
             return (
               <Link
                 key={n.key}
@@ -159,7 +213,8 @@ export default function Shell({ children }: { children: React.ReactNode }) {
                     ? {
                         background: "#fff",
                         color: "#1b2231",
-                        boxShadow: "inset 2px 0 0 #3550c7, 0 1px 2px rgba(20,30,50,.05)",
+                        boxShadow:
+                          "inset 2px 0 0 #3550c7, 0 1px 2px rgba(20,30,50,.05)",
                       }
                     : { color: "#68717f" }),
                 }}
@@ -173,6 +228,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
                     background: active ? "#3550c7" : "#c2cad6",
                   }}
                 />
+
                 <span
                   style={{
                     display: "flex",
@@ -182,8 +238,14 @@ export default function Shell({ children }: { children: React.ReactNode }) {
                     lineHeight: 1.15,
                   }}
                 >
-                  <span style={{ fontWeight: 500, fontSize: 14 }}>{n.label}</span>
-                  <span className="mono" style={{ fontSize: 10, opacity: 0.62 }}>
+                  <span style={{ fontWeight: 500, fontSize: 14 }}>
+                    {n.label}
+                  </span>
+
+                  <span
+                    className="mono"
+                    style={{ fontSize: 10, opacity: 0.62 }}
+                  >
                     {n.sub}
                   </span>
                 </span>
@@ -199,10 +261,14 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             borderTop: "1px solid #d9dfe8",
           }}
         >
-          <div className="mono" style={{ fontSize: 10.5, color: "#8a93a3", lineHeight: 1.7 }}>
+          <div
+            className="mono"
+            style={{ fontSize: 10.5, color: "#8a93a3", lineHeight: 1.7 }}
+          >
             <div>
               <span style={{ color: "#2fa36b" }}>●</span> main · synced
             </div>
+
             <div>{count ?? "—"} meetings indexed</div>
           </div>
         </div>
@@ -233,9 +299,11 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           <span className="mono" style={{ fontSize: 12, color: "#9aa3b2" }}>
             labrag
           </span>
+
           <span className="mono" style={{ fontSize: 12, color: "#c2cad6" }}>
             :~$
           </span>
+
           <span
             className="mono"
             style={{
@@ -251,7 +319,14 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           </span>
         </header>
 
-        <div style={{ flex: 1, minHeight: 0, display: "flex", overflow: "hidden" }}>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: "flex",
+            overflow: "hidden",
+          }}
+        >
           {children}
         </div>
       </div>
