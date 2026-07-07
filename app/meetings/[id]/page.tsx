@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { weekday } from "@/lib/format";
+import { meetingModeLabel } from "@/lib/meetings/modes";
 import type { Meeting, Note, Photo, Transcript } from "@/lib/types";
 import { PhotoUploadPanel } from "@/components/PhotoUploadPanel";
 import { MeetingChatContextPanel } from "@/components/MeetingChatContextPanel";
@@ -10,79 +11,6 @@ import { MeetingDetailWorkspace } from "@/components/MeetingDetailWorkspace";
 import { MeetingWriteToNotionPanel } from "@/components/MeetingWriteToNotionPanel";
 
 export const dynamic = "force-dynamic";
-
-const NOTE_COLLAPSE_CHARS = 700;
-
-const card: React.CSSProperties = {
-  background: "#fff",
-  border: "1px solid #e4e8ef",
-  borderRadius: 13,
-  overflow: "hidden",
-  boxShadow: "0 1px 3px rgba(20,30,50,.04)",
-};
-
-const cardHead: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  padding: "13px 18px",
-  borderBottom: "1px solid #eceff4",
-  background: "#fafbfd",
-};
-
-const noteText: React.CSSProperties = {
-  fontSize: 13.5,
-  lineHeight: 1.55,
-  color: "#25303f",
-  whiteSpace: "pre-wrap",
-  wordBreak: "break-word",
-};
-
-const noteSummary: React.CSSProperties = {
-  cursor: "pointer",
-  listStyle: "none",
-};
-
-const noteToggle: React.CSSProperties = {
-  display: "inline-block",
-  marginTop: 7,
-  fontSize: 12,
-  fontWeight: 700,
-  color: "#3550c7",
-};
-
-function CollapsibleNote({ content }: { content: string }) {
-  const text = content?.trim() ?? "";
-  const shouldCollapse = text.length > NOTE_COLLAPSE_CHARS;
-
-  if (!shouldCollapse) {
-    return <span style={noteText}>{text}</span>;
-  }
-
-  const preview = `${text.slice(0, NOTE_COLLAPSE_CHARS).trimEnd()}\n...`;
-
-  return (
-    <details style={noteText}>
-      <summary style={noteSummary}>
-        <span style={noteText}>{preview}</span>
-        <span style={noteToggle}>Show full note</span>
-      </summary>
-
-      <div
-        style={{
-          marginTop: 10,
-          padding: 12,
-          borderRadius: 10,
-          background: "#f8fafc",
-          border: "1px solid #e5e7eb",
-          whiteSpace: "pre-wrap",
-        }}
-      >
-        {text}
-      </div>
-    </details>
-  );
-}
 
 export default async function MeetingDetailPage({
   params,
@@ -150,23 +78,49 @@ export default async function MeetingDetailPage({
         </Link>
 
         <div style={{ marginBottom: 22 }}>
-          <span
-            className="mono"
+          <div
             style={{
-              display: "inline-block",
-              background: "#eef1fc",
-              color: "#3a4890",
-              border: "1px solid #dde3f7",
-              borderRadius: 6,
-              padding: "3px 10px",
-              fontSize: 12,
-              fontWeight: 500,
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              alignItems: "center",
               marginBottom: 11,
-              whiteSpace: "nowrap",
             }}
           >
-            {meeting.project_tag ?? "미분류"}
-          </span>
+            <span
+              className="mono"
+              style={{
+                display: "inline-block",
+                background: "#eef1fc",
+                color: "#3a4890",
+                border: "1px solid #dde3f7",
+                borderRadius: 6,
+                padding: "3px 10px",
+                fontSize: 12,
+                fontWeight: 500,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {meeting.project_tag ?? "미분류"}
+            </span>
+
+            <span
+              className="mono"
+              style={{
+                display: "inline-block",
+                background: "#f8fafc",
+                color: "#334155",
+                border: "1px solid #dbe3ef",
+                borderRadius: 999,
+                padding: "3px 10px",
+                fontSize: 12,
+                fontWeight: 800,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {meetingModeLabel(meeting.mode)}
+            </span>
+          </div>
 
           <h1
             style={{
@@ -197,6 +151,10 @@ export default async function MeetingDetailPage({
           </div>
         </div>
 
+        <div style={{ marginBottom: 20 }}>
+          <MeetingWriteToNotionPanel meeting={meeting} />
+        </div>
+
         <MeetingDetailWorkspace
           meeting={meeting}
           notes={noteList}
@@ -216,12 +174,6 @@ export default async function MeetingDetailPage({
               <MeetingChatContextPanel
                 key="meeting-chat-context"
                 meetingId={meeting.id}
-              />
-
-              
-              <MeetingWriteToNotionPanel
-                key="write-to-notion"
-                meeting={meeting}
               />
             </>
           }

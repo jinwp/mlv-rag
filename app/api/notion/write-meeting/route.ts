@@ -20,12 +20,18 @@ import {
   toggleBlocks,
   type NotionBlock,
 } from "@/lib/notion/write";
+import {
+  meetingModeLabel,
+  meetingModeTitlePrefix,
+  normalizeMeetingMode,
+} from "@/lib/meetings/modes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type RequestBody = {
   meetingId?: string;
+  mode?: string | null;
 };
 
 type AssetLink = {
@@ -64,12 +70,13 @@ function peopleTitlePart(participants?: string[] | null) {
   return people.join(", ");
 }
 
-function buildNotionMeetingTitle(meeting: Meeting) {
+function buildNotionMeetingTitle(meeting: Meeting, mode?: string | null) {
   const date = safeTitlePart(cleanPart(meeting.date, "UnknownDate"));
+  const modePart = safeTitlePart(meetingModeTitlePrefix(mode));
   const title = safeTitlePart(cleanPart(meeting.title, "Untitled"));
   const people = safeTitlePart(peopleTitlePart(meeting.participants));
 
-  return `${date}-${title}-${people}`;
+  return `${date}-${modePart}-${title}-${people}`;
 }
 
 function fmtElapsed(seconds?: number | null) {
@@ -668,8 +675,9 @@ function buildMeetingBlocks(args: {
   notes: Note[];
   photos: Photo[];
   assetLinks: AssetLink[];
+  modeLabel: string;
 }) {
-  const { meeting, transcripts, notes, photos, assetLinks } = args;
+  const { meeting, transcripts, notes, photos, assetLinks, modeLabel } = args;
 
   const participants = peopleTitlePart(meeting.participants);
 
@@ -678,6 +686,7 @@ function buildMeetingBlocks(args: {
 
     ...toggleBlocks("Metadata", [
       bulletBlock(`Date: ${meeting.date ?? "Unknown"}`),
+      bulletBlock(`Mode: ${modeLabel}`),
       bulletBlock(`Project: ${meeting.project_tag ?? "미분류"}`),
       bulletBlock(`Participants: ${participants}`),
       bulletBlock(`Agenda: ${meeting.agenda?.trim() || "None"}`),
@@ -782,6 +791,9 @@ export async function POST(req: Request) {
     ]);
 
   try {
+    const resolvedMode = normalizeMeetingMode(body.mode ?? meeting.mode);
+    const resolvedModeLabel = meetingModeLabel(resolvedMode);
+
     const projectTag = cleanPart(meeting.project_tag, "");
     const shouldUseProjectPage =
       projectTag.length > 0 && projectTag !== "미분류";
@@ -798,7 +810,7 @@ export async function POST(req: Request) {
           url: null,
         };
 
-    const pageTitle = buildNotionMeetingTitle(meeting);
+    const pageTitle = buildNotionMeetingTitle(meeting, resolvedMode);
 
     await assertChildPageTitleAvailable({
       parentPageId: targetParent.id,
@@ -848,6 +860,7 @@ export async function POST(req: Request) {
       notes: notes ?? [],
       photos: photos ?? [],
       assetLinks,
+      modeLabel: resolvedModeLabel,
     });
 
     const page = await createNotionPage({

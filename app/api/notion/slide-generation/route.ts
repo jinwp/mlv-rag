@@ -296,10 +296,16 @@ async function loadSelectedAssets(assetIds: string[]) {
         meetingId: photo.meeting_id,
         title: `Original image · ${elapsed}`,
         url,
-        preview:
-          photo.diagram_summary?.trim() ||
-          photo.extracted_text?.trim() ||
-          "Original image",
+        preview: [
+          photo.diagram_summary?.trim()
+            ? `Diagram summary:\n${photo.diagram_summary.trim()}`
+            : "",
+          photo.extracted_text?.trim()
+            ? `Extracted OCR text:\n${photo.extracted_text.trim()}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n") || "Original meeting image",
       });
     }
 

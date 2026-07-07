@@ -4,6 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import NotionSlideContextPicker, {
   NotionSlideListItem,
 } from "@/components/NotionSlideContextPicker";
+import {
+  BUILTIN_INSTRUCTION_PRESETS,
+  type InstructionPreset,
+} from "@/lib/slide-generation/presets";
 
 export type SlideMeetingOption = {
   id: string;
@@ -51,6 +55,9 @@ type Props = {
   meetings: SlideMeetingOption[];
   assets: SlideAssetOption[];
 };
+
+const INSTRUCTION_PRESET_STORAGE_KEY =
+  "mlv-rag.slide-generation.instruction-presets.v1";
 
 const pageWrap: React.CSSProperties = {
   width: "100%",
@@ -162,6 +169,50 @@ function assetKindLabel(kind: SlideAssetOption["kind"]) {
   return "IMAGE";
 }
 
+function loadCustomInstructionPresets(): InstructionPreset[] {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const raw = window.localStorage.getItem(INSTRUCTION_PRESET_STORAGE_KEY);
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .map((item) => ({
+        id: String(item.id ?? ""),
+        title: String(item.title ?? ""),
+        instruction: String(item.instruction ?? ""),
+        builtin: false,
+      }))
+      .filter(
+        (item) => item.id && item.title.trim() && item.instruction.trim()
+      );
+  } catch {
+    return [];
+  }
+}
+
+function saveCustomInstructionPresets(presets: InstructionPreset[]) {
+  if (typeof window === "undefined") return;
+
+  window.localStorage.setItem(
+    INSTRUCTION_PRESET_STORAGE_KEY,
+    JSON.stringify(
+      presets.map((preset) => ({
+        id: preset.id,
+        title: preset.title,
+        instruction: preset.instruction,
+      }))
+    )
+  );
+}
+
+function makePresetId() {
+  return `custom-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 export function SlideGenerationClient({ meetings, assets }: Props) {
   const [targets, setTargets] = useState<SlideTarget[]>([]);
   const [targetPageId, setTargetPageId] = useState("");
@@ -176,6 +227,22 @@ export function SlideGenerationClient({ meetings, assets }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<GenerateResponse | null>(null);
+  const [customInstructionPresets, setCustomInstructionPresets] = useState<
+    InstructionPreset[]
+  >([]);
+  const [selectedInstructionPresetId, setSelectedInstructionPresetId] =
+    useState("");
+  const [newPresetTitle, setNewPresetTitle] = useState("");
+  const [showPresetEditor, setShowPresetEditor] = useState(false);
+
+  useEffect(() => {
+    setCustomInstructionPresets(loadCustomInstructionPresets());
+  }, []);
+
+  const instructionPresets = useMemo(
+    () => [...BUILTIN_INSTRUCTION_PRESETS, ...customInstructionPresets],
+    [customInstructionPresets]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -235,6 +302,50 @@ export function SlideGenerationClient({ meetings, assets }: Props) {
         ? prev.filter((id) => id !== assetId)
         : [...prev, assetId]
     );
+  }
+
+  function applyInstructionPreset(presetId: string) {
+    setSelectedInstructionPresetId(presetId);
+
+    const preset = instructionPresets.find((item) => item.id === presetId);
+    if (!preset) return;
+
+    setInstruction(preset.instruction);
+  }
+
+  function saveCurrentInstructionAsPreset() {
+    const presetTitle = newPresetTitle.trim();
+    const body = instruction.trim();
+
+    if (!presetTitle || !body) return;
+
+    const nextPresets = [
+      ...customInstructionPresets,
+      {
+        id: makePresetId(),
+        title: presetTitle,
+        instruction: body,
+        builtin: false,
+      },
+    ];
+
+    setCustomInstructionPresets(nextPresets);
+    saveCustomInstructionPresets(nextPresets);
+    setNewPresetTitle("");
+    setShowPresetEditor(false);
+  }
+
+  function deleteCustomInstructionPreset(presetId: string) {
+    const nextPresets = customInstructionPresets.filter(
+      (preset) => preset.id !== presetId
+    );
+
+    setCustomInstructionPresets(nextPresets);
+    saveCustomInstructionPresets(nextPresets);
+
+    if (selectedInstructionPresetId === presetId) {
+      setSelectedInstructionPresetId("");
+    }
   }
 
   async function generateSlide() {
@@ -371,6 +482,144 @@ export function SlideGenerationClient({ meetings, assets }: Props) {
 
                 <div>
                   <label style={label}>Instruction</label>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 8,
+                      marginBottom: 8,
+                      padding: 10,
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 10,
+                      background: "#f8fafc",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "minmax(0, 1fr) auto",
+                        gap: 8,
+                        alignItems: "center",
+                      }}
+                    >
+                      <select
+                        value={selectedInstructionPresetId}
+                        onChange={(e) => applyInstructionPreset(e.target.value)}
+                        style={input}
+                      >
+                        <option value="">Select instruction preset...</option>
+
+                        <optgroup label="Built-in">
+                          {BUILTIN_INSTRUCTION_PRESETS.map((preset) => (
+                            <option key={preset.id} value={preset.id}>
+                              {preset.title}
+                            </option>
+                          ))}
+                        </optgroup>
+
+                        {customInstructionPresets.length > 0 && (
+                          <optgroup label="Custom">
+                            {customInstructionPresets.map((preset) => (
+                              <option key={preset.id} value={preset.id}>
+                                {preset.title}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowPresetEditor((value) => !value)}
+                        style={{
+                          border: "1px solid #cbd5e1",
+                          background: "#fff",
+                          color: "#111827",
+                          borderRadius: 9,
+                          padding: "9px 10px",
+                          fontWeight: 850,
+                          fontSize: 12,
+                          cursor: "pointer",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {showPresetEditor ? "Close" : "Save preset"}
+                      </button>
+                    </div>
+
+                    {showPresetEditor && (
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "minmax(0, 1fr) auto",
+                          gap: 8,
+                          alignItems: "center",
+                        }}
+                      >
+                        <input
+                          value={newPresetTitle}
+                          onChange={(e) => setNewPresetTitle(e.target.value)}
+                          placeholder="Preset name"
+                          style={input}
+                        />
+
+                        <button
+                          type="button"
+                          onClick={saveCurrentInstructionAsPreset}
+                          disabled={!newPresetTitle.trim() || !instruction.trim()}
+                          style={{
+                            ...button,
+                            padding: "9px 10px",
+                            fontSize: 12,
+                            opacity:
+                              newPresetTitle.trim() && instruction.trim()
+                                ? 1
+                                : 0.55,
+                            cursor:
+                              newPresetTitle.trim() && instruction.trim()
+                                ? "pointer"
+                                : "not-allowed",
+                          }}
+                        >
+                          Add
+                        </button>
+                      </div>
+                    )}
+
+                    {customInstructionPresets.length > 0 && (
+                      <div
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: 6,
+                        }}
+                      >
+                        {customInstructionPresets.map((preset) => (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() =>
+                              deleteCustomInstructionPreset(preset.id)
+                            }
+                            title={`Delete ${preset.title}`}
+                            style={{
+                              border: "1px solid #fecaca",
+                              background: "#fef2f2",
+                              color: "#991b1b",
+                              borderRadius: 999,
+                              padding: "4px 8px",
+                              fontSize: 11.5,
+                              fontWeight: 750,
+                              cursor: "pointer",
+                            }}
+                          >
+                            Delete {preset.title}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
                   <textarea
                     value={instruction}
                     onChange={(e) => setInstruction(e.target.value)}

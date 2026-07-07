@@ -3,6 +3,10 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import {
+  MEETING_MODE_OPTIONS,
+  type MeetingMode,
+} from "@/lib/meetings/modes";
 
 const PROJECT_CHIPS = ["VLA 로봇팔", "SBQ 논문"];
 
@@ -50,6 +54,7 @@ export default function NewMeetingPage() {
   const [title, setTitle] = useState("");
   const [date, setDate] = useState(today);
   const [project, setProject] = useState("");
+  const [meetingMode, setMeetingMode] = useState<MeetingMode>("meeting");
   const [agenda, setAgenda] = useState("");
   const [participants, setParticipants] = useState<string[]>([]);
   const [partDraft, setPartDraft] = useState("");
@@ -85,6 +90,7 @@ export default function NewMeetingPage() {
         date,
         participants,
         project_tag: project.trim() || "미분류",
+        mode: meetingMode,
         agenda: agenda.trim() || null,
       })
       .select("id")
@@ -248,9 +254,17 @@ export default function NewMeetingPage() {
             />
           </label>
 
-          {/* 날짜 + 프로젝트 */}
-          <div style={{ display: "flex", gap: 16, marginBottom: 22 }}>
-            <label style={{ flex: "0 0 200px" }}>
+          {/* 날짜 + 프로젝트 + 모드 */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "200px minmax(0, 1fr) 210px",
+              gap: 16,
+              marginBottom: 22,
+              alignItems: "start",
+            }}
+          >
+            <label>
               <div style={{ fontSize: 12.5, fontWeight: 600, color: "#3a4252", marginBottom: 7 }}>
                 날짜
               </div>
@@ -262,7 +276,8 @@ export default function NewMeetingPage() {
                 style={{ ...inputBase, padding: "10px 13px", fontSize: 13.5 }}
               />
             </label>
-            <label style={{ flex: 1 }}>
+
+            <label>
               <div style={{ fontSize: 12.5, fontWeight: 600, color: "#3a4252", marginBottom: 7 }}>
                 프로젝트 태그
               </div>
@@ -293,6 +308,26 @@ export default function NewMeetingPage() {
                     {c}
                   </button>
                 ))}
+              </div>
+            </label>
+
+            <label>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: "#3a4252", marginBottom: 7 }}>
+                Mode
+              </div>
+              <select
+                value={meetingMode}
+                onChange={(e) => setMeetingMode(e.target.value as MeetingMode)}
+                style={{ ...inputBase, padding: "10px 13px", fontSize: 14 }}
+              >
+                {MEETING_MODE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <div style={{ marginTop: 8, fontSize: 11.5, color: "#8a93a3", lineHeight: 1.45 }}>
+                {MEETING_MODE_OPTIONS.find((option) => option.value === meetingMode)?.description}
               </div>
             </label>
           </div>

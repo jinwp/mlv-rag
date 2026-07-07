@@ -179,6 +179,41 @@ export function MeetingNotesPanel({
   const [elapsedInput, setElapsedInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [copiedNoteId, setCopiedNoteId] = useState<string | null>(null);
+
+  async function copyTextToClipboard(text: string) {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+
+    const textareaEl = document.createElement("textarea");
+    textareaEl.value = text;
+    textareaEl.style.position = "fixed";
+    textareaEl.style.left = "-9999px";
+    textareaEl.style.top = "-9999px";
+    document.body.appendChild(textareaEl);
+    textareaEl.focus();
+    textareaEl.select();
+    document.execCommand("copy");
+    document.body.removeChild(textareaEl);
+  }
+
+  async function copyNote(note: Note) {
+    const noteId = String(note.id);
+    const text = `[${fmtElapsed(note.elapsed_seconds)}] ${note.content?.trim() ?? ""}`;
+
+    try {
+      await copyTextToClipboard(text);
+      setCopiedNoteId(noteId);
+
+      window.setTimeout(() => {
+        setCopiedNoteId((current) => (current === noteId ? null : current));
+      }, 1200);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to copy note.");
+    }
+  }
 
   async function addNote() {
     setBusy(true);
@@ -301,34 +336,69 @@ export function MeetingNotesPanel({
           overflow: "auto",
         }}
       >
-        {notes.map((note, index) => (
-          <div
-            key={`${note.id}-${index}`}
-            style={{
-              display: "flex",
-              gap: 11,
-              padding: "9px 12px",
-              borderRadius: 8,
-            }}
-          >
-            <span
-              className="mono"
+        {notes.map((note, index) => {
+          const noteId = String(note.id);
+          const copied = copiedNoteId === noteId;
+
+          return (
+            <div
+              key={`${note.id}-${index}`}
+              role="button"
+              tabIndex={0}
+              title="Click to copy this note"
+              onClick={() => copyNote(note)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  copyNote(note);
+                }
+              }}
               style={{
-                flex: "none",
-                fontSize: 11,
-                fontWeight: 600,
-                color: "#3550c7",
-                paddingTop: 2,
+                display: "flex",
+                gap: 11,
+                padding: "9px 12px",
+                borderRadius: 8,
+                cursor: "pointer",
+                background: copied ? "#ecfdf5" : "transparent",
+                border: copied ? "1px solid #bbf7d0" : "1px solid transparent",
               }}
             >
-              [{fmtElapsed(note.elapsed_seconds)}]
-            </span>
+              <span
+                className="mono"
+                style={{
+                  flex: "none",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "#3550c7",
+                  paddingTop: 2,
+                }}
+              >
+                [{fmtElapsed(note.elapsed_seconds)}]
+              </span>
 
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <CollapsibleNote content={note.content} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {copied && (
+                  <div
+                    style={{
+                      display: "inline-block",
+                      marginBottom: 5,
+                      padding: "2px 7px",
+                      borderRadius: 999,
+                      background: "#dcfce7",
+                      color: "#166534",
+                      fontSize: 11,
+                      fontWeight: 800,
+                    }}
+                  >
+                    Copied
+                  </div>
+                )}
+
+                <CollapsibleNote content={note.content} />
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
 
         {notes.length === 0 && (
           <div

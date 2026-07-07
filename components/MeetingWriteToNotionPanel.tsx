@@ -2,6 +2,12 @@
 
 import { useMemo, useState } from "react";
 import type { Meeting } from "@/lib/types";
+import {
+  MEETING_MODE_OPTIONS,
+  meetingModeTitlePrefix,
+  normalizeMeetingMode,
+  type MeetingMode,
+} from "@/lib/meetings/modes";
 
 type Props = {
   meeting: Meeting;
@@ -83,12 +89,13 @@ function safeTitlePart(value: string) {
     .trim();
 }
 
-function notionTitlePreview(meeting: Meeting) {
+function notionTitlePreview(meeting: Meeting, mode: MeetingMode) {
   const date = safeTitlePart(meeting.date?.trim() || "UnknownDate");
+  const modePart = safeTitlePart(meetingModeTitlePrefix(mode));
   const title = safeTitlePart(meeting.title?.trim() || "Untitled");
   const people = safeTitlePart(peopleTitlePart(meeting.participants));
 
-  return `${date}-${title}-${people}`;
+  return `${date}-${modePart}-${title}-${people}`;
 }
 
 function detailText(details: unknown) {
@@ -107,8 +114,46 @@ export function MeetingWriteToNotionPanel({ meeting }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<WriteResponse | null>(null);
+  const [mode, setMode] = useState<MeetingMode>(
+    normalizeMeetingMode(meeting.mode)
+  );
+  const [modeSaving, setModeSaving] = useState(false);
 
-  const titlePreview = useMemo(() => notionTitlePreview(meeting), [meeting]);
+  const titlePreview = useMemo(
+    () => notionTitlePreview(meeting, mode),
+    [meeting, mode]
+  );
+
+  async function updateMode(nextMode: MeetingMode) {
+    const prevMode = mode;
+
+    setMode(nextMode);
+    setModeSaving(true);
+    setError("");
+
+    try {
+      const res = await fetch(`/api/meetings/${meeting.id}/mode`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          mode: nextMode,
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || data?.error) {
+        throw new Error(data?.error ?? "failed to update meeting mode");
+      }
+    } catch (err) {
+      setMode(prevMode);
+      setError(err instanceof Error ? err.message : "Failed to update mode.");
+    } finally {
+      setModeSaving(false);
+    }
+  }
 
   async function writeToNotion() {
     setBusy(true);
@@ -123,6 +168,7 @@ export function MeetingWriteToNotionPanel({ meeting }: Props) {
         },
         body: JSON.stringify({
           meetingId: meeting.id,
+          mode,
         }),
       });
 
@@ -186,6 +232,33 @@ export function MeetingWriteToNotionPanel({ meeting }: Props) {
           >
             {titlePreview}
           </div>
+        </div>
+
+        <div style={{ display: "grid", gap: 6 }}>
+          <label style={{ fontSize: 12, fontWeight: 800, color: "#475569" }}>
+            Document mode
+          </label>
+
+          <select
+            value={mode}
+            onChange={(e) => updateMode(e.target.value as MeetingMode)}
+            disabled={busy || modeSaving}
+            style={{
+              width: "100%",
+              border: "1px solid #d9dee8",
+              borderRadius: 9,
+              padding: "8px 10px",
+              fontSize: 12.5,
+              background: "#fff",
+              opacity: busy || modeSaving ? 0.65 : 1,
+            }}
+          >
+            {MEETING_MODE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label} — {option.description}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div style={muted}>

@@ -1,3 +1,5 @@
+import type { MeetingMode } from "@/lib/meetings/modes";
+
 export type Meeting = {
   id: string;
   title: string;
@@ -10,6 +12,7 @@ export type Meeting = {
   summary_text?: string | null;
   summary_generated_at?: string | null;
   summary_model?: string | null;
+  mode?: MeetingMode | null;
 };
 
 export type Photo = {

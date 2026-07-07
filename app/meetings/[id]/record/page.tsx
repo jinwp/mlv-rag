@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { MEDIA_BUCKET, supabase } from "@/lib/supabaseClient";
 import { fmtClock, fmtLog } from "@/lib/format";
 import { mockTranscribe } from "@/lib/mockTranscribe";
+import { meetingModeLabel } from "@/lib/meetings/modes";
 
 type Capture = { localId: number; url: string; elapsed: number };
 type LocalNote = { localId: number; elapsed: number; content: string };
@@ -46,7 +47,7 @@ export default function RecordPage() {
   useEffect(() => {
     supabase
       .from("meetings")
-      .select("title, project_tag, participants")
+      .select("title, project_tag, participants, mode")
       .eq("id", id)
       .single()
       .then(({ data }) => {

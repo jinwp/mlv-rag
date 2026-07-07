@@ -8,6 +8,7 @@ import {
   loadSelectedNotionPageContexts,
 } from "@/lib/notion/context";
 import { syncNotionSlideChunksForMeeting } from "@/lib/memory/notionSlideChunks";
+import { meetingModeLabel } from "@/lib/meetings/modes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -90,6 +91,7 @@ function buildMeetingContext(meeting: Meeting) {
   return [
     `Title: ${meeting.title ?? "Untitled meeting"}`,
     `Date: ${meeting.date ?? "Unknown"}`,
+    `Mode: ${meetingModeLabel(meeting.mode)}`,
     `Project tag: ${meeting.project_tag ?? "None"}`,
     `Participants: ${(meeting.participants ?? []).join(", ") || "Unknown"}`,
     `Agenda: ${meeting.agenda ?? "None"}`,
